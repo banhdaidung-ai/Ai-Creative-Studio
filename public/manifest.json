@@ -1,0 +1,16 @@
+{
+    "name": "Ai Creative Studio",
+    "short_name": "AI Studio",
+    "description": "Không gian sáng tạo AI của Bành Đại Dũng",
+    "start_url": "./",
+    "display": "standalone",
+    "background_color": "#050505",
+    "theme_color": "#3b82f6",
+    "icons": [
+        {
+            "src": "favicon.ico",
+            "sizes": "64x64 32x32 24x24 16x16",
+            "type": "image/x-icon"
+        }
+    ]
+}

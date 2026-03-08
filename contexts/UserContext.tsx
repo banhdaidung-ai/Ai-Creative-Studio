@@ -22,6 +22,13 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   const refreshUser = async () => {
+    // Skip auth check if running on GitHub Pages (static mode)
+    if (window.location.hostname.endsWith('.github.io')) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch('/api/auth/me');
       if (response.ok) {
@@ -31,7 +38,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(null);
       }
     } catch (error) {
-      console.error('Failed to fetch user:', error);
+      console.warn('Backend auth unavailable, running in guest mode.');
       setUser(null);
     } finally {
       setLoading(false);

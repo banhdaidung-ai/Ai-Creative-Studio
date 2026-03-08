@@ -1,9 +1,12 @@
 {
   "name": "ai-creative-studio",
   "private": true,
+  "homepage": "https://banhdaidung-ai.github.io/Ai-Creative-Studio",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist",
     "dev": "tsx server.ts",
     "build": "tsc && vite build",
     "start": "node server.ts",
@@ -37,6 +40,7 @@
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^10.0.2",
+    "gh-pages": "^6.3.0",
     "typescript": "~5.8.2",
     "typescript-eslint": "^8.56.1",
     "vite": "^6.2.0"

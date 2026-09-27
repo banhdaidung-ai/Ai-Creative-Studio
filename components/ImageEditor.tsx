@@ -52,6 +52,7 @@ const ImageEditor: React.FC = () => {
   const [timer, setTimer] = useState(0);
   const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image');
   const [aspectRatio, setAspectRatio] = useState('1:1');
+  const usingFlow = isFlowModel(selectedModelId);
 
   useEffect(() => {
     const extracted = extractRatioFromPrompt(prompt);
@@ -202,14 +203,14 @@ const ImageEditor: React.FC = () => {
               URL.revokeObjectURL(objectUrl);
             };
 
-            const base64 = await resizeImage(file, 2048, 'image/png');
+            const base64 = await resizeImage(file, 1536, 'image/jpeg', 0.88);
             setModelImage(base64);
             setResultImage(null);
             if (modelInputRef.current) modelInputRef.current.value = '';
         } else {
-            const base64s = await Promise.all(fileArray.map(f => resizeImage(f, 1024, 'image/jpeg', 0.8)));
+            const base64s = await Promise.all(fileArray.map(f => resizeImage(f, 1024, 'image/jpeg', 0.85)));
             setRefImages(prev => [...prev, ...base64s]);
-            base64s.forEach(b => addToLibrary(b));
+            addBatchToLibrary(base64s);
             if (refInputRef.current) refInputRef.current.value = '';
         }
     } catch (err) {
@@ -314,11 +315,13 @@ const ImageEditor: React.FC = () => {
 
   const handleGenerate = async () => {
     const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
-    const usingFlow = isFlowModel(selectedModelId);
 
     // Gemini API key check (only for non-Flow models)
     if (!usingFlow && selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
-    if (!modelImage && !prompt) { setError("Vui lòng tải ảnh mẫu hoặc nhập mô tả ý tưởng."); return; }
+    if (!modelImage && !prompt && refImages.length === 0) { 
+      setError("Vui lòng tải ảnh mẫu, ảnh tham chiếu hoặc nhập mô tả ý tưởng."); 
+      return; 
+    }
     setIsLoading(true);
     setLoadingMessage("Đang phân tích yêu cầu...");
     setError(null);
@@ -337,13 +340,15 @@ const ImageEditor: React.FC = () => {
         }
 
         if (isLocalFlowActive) {
+          const activeRef = modelImage || (refImages.length > 0 ? refImages[0] : undefined);
           const flowResult = await generateImageViaFlow(
             {
-              prompt: prompt || 'Generate a high quality image',
+              prompt: prompt || 'Generate a high quality photoshoot image based on the reference',
               aspectRatio,
               numImages: 1,
-              referenceImageBase64: modelImage || undefined,
-              referenceImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+              model: selectedModelId,
+              referenceImageBase64: activeRef,
+              referenceImageMime: activeRef?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
             },
             (progress, message) => {
               setLoadingMessage(message || `Google Flow (${progress}%)`);
@@ -508,13 +513,19 @@ const ImageEditor: React.FC = () => {
     }
   };
 
-  const addToLibrary = (base64: string) => {
+  const addBatchToLibrary = (base64s: string[]) => {
     setRefLibrary(prev => {
-        if (prev.includes(base64)) return prev;
-        const newLib = [base64, ...prev].slice(0, 30);
-        saveState(REF_LIB_KEY, newLib).catch(console.warn);
-        return newLib; 
+      const existing = new Set(prev);
+      const toAdd = base64s.filter(b => !existing.has(b));
+      if (toAdd.length === 0) return prev;
+      const newLib = [...toAdd, ...prev].slice(0, 30);
+      saveState(REF_LIB_KEY, newLib).catch(console.warn);
+      return newLib;
     });
+  };
+
+  const addToLibrary = (base64: string) => {
+    addBatchToLibrary([base64]);
   };
 
   const removeFromLibrary = (img: string) => {

@@ -4,6 +4,7 @@ import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS } from '../services/gemini'
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, extractRatioFromPrompt } from '../utils/image';
+import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
 import PhotoEditor from './PhotoEditor';
 import { useProject } from '../src/context/ProjectContext';
 import { 
@@ -56,7 +57,9 @@ const MultiAngleStudio: React.FC = () => {
     return initialPrompts;
   });
 
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
+  const [selectedModelId, setSelectedModelId] = useState<string>(() => {
+    return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+  });
   const [imageSize, setImageSize] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('3:4');
   
@@ -98,6 +101,11 @@ const MultiAngleStudio: React.FC = () => {
         if (window.aistudio?.hasSelectedApiKey) {
             const has = await window.aistudio.hasSelectedApiKey();
             setApiKeySelected(has);
+            if (has) return;
+        }
+        const flowReady = await isFlowBackendAvailable().catch(() => false);
+        if (flowReady) {
+            setApiKeySelected(true);
         }
     };
     checkKey();
@@ -112,7 +120,10 @@ const MultiAngleStudio: React.FC = () => {
         } else if (window.aistudio?.hasSelectedApiKey) {
             window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
         } else {
-            setApiKeySelected(false);
+            isFlowBackendAvailable().then(ready => {
+                if (ready) setApiKeySelected(true);
+                else setApiKeySelected(false);
+            }).catch(() => setApiKeySelected(false));
         }
     };
     window.addEventListener('storage', handleKeyUpdate);
@@ -154,7 +165,7 @@ const MultiAngleStudio: React.FC = () => {
         };
     }
     
-    const base64 = await resizeImage(file);
+    const base64 = await resizeImage(file, 1536, 'image/jpeg', 0.88);
     if (type === 'model') {
         setModelImage(base64);
         setResults({});
@@ -249,7 +260,13 @@ const MultiAngleStudio: React.FC = () => {
 
   const generateAngle = async (angleId: string) => {
     if (!modelImage) return;
-    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
+    const isFlow = isFlowModel(selectedModelId);
+    let flowReady = false;
+    if (isFlow) {
+      flowReady = await isFlowBackendAvailable().catch(() => false);
+    }
+
+    if (!isFlow && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
         handleSelectKey();
         return;
     }
@@ -257,22 +274,49 @@ const MultiAngleStudio: React.FC = () => {
 
     setProcessingAngles(prev => new Set(prev).add(angleId));
     try {
-        const result = await geminiService.generateSingleAngle(
-            modelImage, 
-            angleId, 
-            [], 
-            { 
-                aspectRatio: aspectRatio, 
-                imageSize: imageSize,
-                modelId: selectedModelId,
-                customPrompt: prompts[angleId],
-                faceImageBase64: faceImage || undefined,
-                backImageBase64: backImage || undefined,
-                stylePrompt: STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt
+        let result: string | null | undefined = null;
+
+        if (isFlow && flowReady) {
+            const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
+            const stylePrompt = STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt || '';
+            const customUserPrompt = prompts[angleId] || angleConfig?.userDesc || '';
+            const prompt = `Professional high-end fashion lookbook photoshoot of the identical model wearing the exact same clothes from reference. Camera framing and angle: ${angleConfig?.promptDesc || ''}. Model pose: ${customUserPrompt}. ${stylePrompt}. Maintain 100% consistent model facial identity, body proportions, identical garment fabrics and patterns, studio flash lighting, 8k resolution, crisp photorealistic quality.`;
+
+            let refImg = modelImage;
+            if ((angleId === 'close' || angleId === 'macro') && faceImage) refImg = faceImage;
+            else if (angleId === 'back' && backImage) refImg = backImage;
+
+            const flowResult = await generateImageViaFlow({
+                prompt,
+                aspectRatio,
+                numImages: 1,
+                model: selectedModelId,
+                referenceImageBase64: refImg,
+                referenceImageMime: refImg.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+            });
+
+            if (flowResult) {
+                result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
             }
-        );
+        } else {
+            result = await geminiService.generateSingleAngle(
+                modelImage, 
+                angleId, 
+                [], 
+                { 
+                    aspectRatio: aspectRatio, 
+                    imageSize: imageSize,
+                    modelId: selectedModelId,
+                    customPrompt: prompts[angleId],
+                    faceImageBase64: faceImage || undefined,
+                    backImageBase64: backImage || undefined,
+                    stylePrompt: STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt
+                }
+            );
+        }
+
         if (result) {
-            setResults(prev => ({ ...prev, [angleId]: result }));
+            setResults(prev => ({ ...prev, [angleId]: result! }));
             setSelectedAngles(prev => new Set(prev).add(angleId));
             
             // Add to global history
@@ -281,10 +325,15 @@ const MultiAngleStudio: React.FC = () => {
               prompt: prompts[angleId],
               mode: 'MULTI_ANGLE'
             });
+            toast.success(`Đã tạo xong góc: ${ANGLE_CONFIGS.find(a => a.id === angleId)?.name || angleId}`);
+        } else {
+            throw new Error('Không nhận được kết quả từ AI.');
         }
     } catch (err: any) { 
         console.error(err); 
-        toast.error('Lỗi khi tạo góc ảnh này', { description: err.message || 'Vui lòng kiểm tra lại cấu hình hoặc API Key.' });
+        toast.error(`Lỗi khi tạo góc ${ANGLE_CONFIGS.find(a => a.id === angleId)?.name || angleId}`, { 
+            description: err.message || 'Vui lòng kiểm tra lại cấu hình hoặc kết nối Google Flow.' 
+        });
     } finally {
         setProcessingAngles(prev => {
             const next = new Set(prev);
@@ -294,12 +343,17 @@ const MultiAngleStudio: React.FC = () => {
     }
   };
 
-  const generateAll = () => {
-    if (!modelImage) return;
+  const generateAll = async () => {
+    if (!modelImage || processingAngles.size > 0) return;
+    const isFlow = isFlowModel(selectedModelId);
     const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
-    if (selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
+    if (!isFlow && selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
     if (window.innerWidth < 1024) setShowConfig(false);
-    ANGLE_CONFIGS.forEach(angle => generateAngle(angle.id));
+
+    // Sequential generation ensures stability and avoids Flow rate limits
+    for (const angle of ANGLE_CONFIGS) {
+        await generateAngle(angle.id);
+    }
   };
 
   const toggleSelectAll = () => {

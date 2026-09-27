@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { geminiService, MODEL_OPTIONS } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
 import { resizeImage } from '../utils/image';
+import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
 import MaskDrawEditor from './MaskDrawEditor';
 import AspectRatioSelector from './AspectRatioSelector';
 import { 
@@ -37,7 +38,9 @@ const VirtualTryOn: React.FC = () => {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [showConfig, setShowConfig] = useState(true);
   
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
+  const [selectedModelId, setSelectedModelId] = useState<string>(() => {
+    return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+  });
   const [imageSize, setImageSize] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('3:4');
 
@@ -60,6 +63,11 @@ const VirtualTryOn: React.FC = () => {
         if (window.aistudio?.hasSelectedApiKey) {
             const has = await window.aistudio.hasSelectedApiKey();
             setApiKeySelected(has);
+            if (has) return;
+        }
+        const flowReady = await isFlowBackendAvailable().catch(() => false);
+        if (flowReady) {
+            setApiKeySelected(true);
         }
     };
     checkKey();
@@ -74,7 +82,10 @@ const VirtualTryOn: React.FC = () => {
         } else if (window.aistudio?.hasSelectedApiKey) {
             window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
         } else {
-            setApiKeySelected(false);
+            isFlowBackendAvailable().then(ready => {
+                if (ready) setApiKeySelected(true);
+                else setApiKeySelected(false);
+            }).catch(() => setApiKeySelected(false));
         }
     };
     window.addEventListener('storage', handleKeyUpdate);
@@ -108,7 +119,7 @@ const VirtualTryOn: React.FC = () => {
 
   const processFile = async (file: File, type: 'model' | 'top' | 'bottom' | 'accessory') => {
     if (!file.type.startsWith('image/')) return;
-    const base64 = await resizeImage(file);
+    const base64 = await resizeImage(file, 1536, 'image/jpeg', 0.88);
     if (type === 'model') {
         setModelImage(base64);
         setResultImage(null);
@@ -123,7 +134,13 @@ const VirtualTryOn: React.FC = () => {
       return;
     }
 
-    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
+    const isFlow = isFlowModel(selectedModelId);
+    let flowReady = false;
+    if (isFlow) {
+      flowReady = await isFlowBackendAvailable().catch(() => false);
+    }
+
+    if (!isFlow && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
       handleSelectKey();
       return;
     }
@@ -136,39 +153,57 @@ const VirtualTryOn: React.FC = () => {
     const outfitDesc = [];
     const refs = [];
     if (topRef) {
-        outfitDesc.push("the jacket/top from the first product reference image");
+        outfitDesc.push("the jacket/top garment from product reference");
         refs.push(topRef);
     }
     if (bottomRef) {
-        outfitDesc.push("the jeans/bottom from the product reference image");
+        outfitDesc.push("the jeans/bottom garment from product reference");
         refs.push(bottomRef);
     }
     if (accessoryRef) {
-        outfitDesc.push("the accessory from the reference image");
+        outfitDesc.push("the accessory from product reference");
         refs.push(accessoryRef);
     }
 
-    let prompt = `Replace the existing outfit on the model with exactly: ${outfitDesc.join(' and ')}. 
+    let prompt = `Virtual fashion try-on: Replace the existing clothes on the model with: ${outfitDesc.join(' and ')}. 
     REQUIREMENTS:
-    1. Perfect Edge isolation: The new garments must be isolated perfectly onto the model's body with smooth, sharp edges.
-    2. Zero White Halo: Ensure no artifacts or white lines appear between the model and the background.
-    3. Material Fidelity: Preserve the exact textures (denim, wool, etc.) and colors from the reference product photos.
-    4. Integration: Naturally integrate shadows and folds based on the model's pose and original lighting.`;
+    1. Perfect Edge isolation: The new garments must fit naturally onto the model's body with sharp, clean contours.
+    2. Zero White Halo: Seamless integration between the garments, model body, and background.
+    3. Material Fidelity: Realistic fabric textures, folds, wrinkles, and natural shadows corresponding to the model's pose.
+    4. Identity Preservation: Maintain 100% identical facial features and body proportions of the original model.`;
 
     if (maskImage) {
         refs.push(maskImage);
-        prompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
+        prompt += `\n\nCRITICAL MASK INSTRUCTION: An inpainting mask is provided. Only modify areas within the mask and keep everything else identical.`;
     }
 
     try {
-      const result = await geminiService.editImage(modelImage, prompt, refs, {
-        modelId: selectedModelId,
-        aspectRatio,
-        imageSize
-      });
+      let result: string | null | undefined = null;
+
+      if (isFlow && flowReady) {
+        toast.info('Đang thực hiện ướm đồ qua Google Flow...');
+        const flowResult = await generateImageViaFlow({
+          prompt,
+          aspectRatio,
+          numImages: 1,
+          model: selectedModelId,
+          referenceImageBase64: modelImage,
+          referenceImageMime: modelImage.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+        });
+        if (flowResult) {
+          result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
+        }
+      } else {
+        result = await geminiService.editImage(modelImage, prompt, refs, {
+          modelId: selectedModelId,
+          aspectRatio,
+          imageSize
+        });
+      }
 
       if (result) {
         setResultImage(result);
+        toast.success('Đã ướm thử trang phục thành công!');
       } else {
         throw new Error("Không nhận được kết quả từ AI.");
       }

@@ -2,8 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { geminiService } from '../services/gemini';
 import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable } from '../services/flowService';
-import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Plus, Globe } from 'lucide-react';
-import { fileToBase64 } from '../utils/image';
+import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Plus, Globe, X } from 'lucide-react';
+import { fileToBase64, resizeImage } from '../utils/image';
 import { useProject } from '../src/context/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
@@ -18,14 +18,21 @@ const VideoGenerator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
-  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow'>('gemini');
+  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow'>('flow');
   const [flowVideoModel, setFlowVideoModel] = useState<string>(FLOW_MODEL_IDS.VIDEO_VEO_QUALITY);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const [duration, setDuration] = useState<number>(5);
+  const usingFlow = selectedVideoModel === 'flow';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const checkKey = async () => {
+        const isFlowReady = await isFlowBackendAvailable();
+        if (isFlowReady) {
+            setSelectedVideoModel('flow');
+            setApiKeySelected(true);
+            return;
+        }
         if (localStorage.getItem('gemini_api_key') || localStorage.getItem('google_account_pro') === 'true') {
             setApiKeySelected(true);
             return;
@@ -37,8 +44,9 @@ const VideoGenerator: React.FC = () => {
     };
     checkKey();
 
-    const handleKeyUpdate = () => {
-        if (localStorage.getItem('gemini_api_key') || localStorage.getItem('google_account_pro') === 'true') {
+    const handleKeyUpdate = async () => {
+        const isFlowReady = await isFlowBackendAvailable();
+        if (isFlowReady || localStorage.getItem('gemini_api_key') || localStorage.getItem('google_account_pro') === 'true') {
             setApiKeySelected(true);
         } else if (window.aistudio?.hasSelectedApiKey) {
             window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
@@ -70,7 +78,7 @@ const VideoGenerator: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       try {
-        const base64 = await fileToBase64(file);
+        const base64 = await resizeImage(file, 1280, 'image/jpeg', 0.85);
         setImage(base64);
         setError(null);
       } catch (err) {
@@ -218,7 +226,16 @@ const VideoGenerator: React.FC = () => {
                 className="relative aspect-video bg-white/5 border-2 border-dashed border-white/10 rounded-2xl overflow-hidden group cursor-pointer hover:border-red-500/50 transition-all"
               >
                 {image ? (
-                  <img src={`data:image/png;base64,${image}`} className="w-full h-full object-cover" alt="Reference" />
+                  <div className="relative w-full h-full">
+                    <img src={`data:image/jpeg;base64,${image}`} className="w-full h-full object-cover" alt="Reference" />
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setImage(null); }}
+                      className="absolute top-2 right-2 p-1.5 bg-red-600/80 hover:bg-red-600 text-white rounded-full shadow-lg transition-all z-10"
+                      title="Xóa ảnh tham chiếu"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
                     <Upload className="w-6 h-6 text-slate-600 mb-2 group-hover:scale-110 transition-transform" />
@@ -478,7 +495,7 @@ const VideoGenerator: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedVideoModel('veo');
+                  setSelectedVideoModel('gemini');
                   setError(null);
                   toast.success('Đã chuyển sang mô hình Gemini Veo.');
                   if (!apiKeySelected) {

@@ -8,51 +8,120 @@ export const extractRatioFromPrompt = (prompt: string): string | null => {
 };
 
 export const fileToBase64 = (file: File): Promise<string> => {
+  // If file is large (> 2MB), automatically resize to avoid browser UI thread freeze
+  if (file.size > 2 * 1024 * 1024) {
+    return resizeImage(file, 1536, 'image/jpeg', 0.85);
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result as string;
-      resolve(result.split(',')[1]);
+      resolve(result.includes(',') ? result.split(',')[1] : result);
     };
     reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
   });
 };
 
-export const resizeImage = (file: File, maxSize: number = 2048, mimeType: string = 'image/png', quality: number = 0.9): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (e) => {
-      const img = new Image();
-      img.src = e.target?.result as string;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let w = img.width;
-        let h = img.height;
+export const resizeImage = async (
+  file: File, 
+  maxSize: number = 1536, 
+  mimeType: string = 'image/jpeg', 
+  quality: number = 0.85
+): Promise<string> => {
+  try {
+    // 1. First attempt: use createImageBitmap for off-thread non-blocking decoding
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(file);
+        let w = bitmap.width;
+        let h = bitmap.height;
 
         if (w > h) {
           if (w > maxSize) {
-            h *= maxSize / w;
+            h = Math.round((h * maxSize) / w);
             w = maxSize;
           }
         } else {
           if (h > maxSize) {
-            w *= maxSize / h;
+            w = Math.round((w * maxSize) / h);
             h = maxSize;
           }
         }
 
-        canvas.width = w;
-        canvas.height = h;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
         const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL(mimeType, quality).split(',')[1]);
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(bitmap, 0, 0, w, h);
+          bitmap.close();
+          const dataUrl = canvas.toDataURL(mimeType, quality);
+          return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+        }
+      } catch {
+        // Fallback to Image element below
+      }
+    }
+
+    // 2. Fallback: use URL.createObjectURL (avoids heavy readAsDataURL RAM consumption)
+    return await new Promise<string>((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let w = img.width;
+          let h = img.height;
+
+          if (w > h) {
+            if (w > maxSize) {
+              h = Math.round((h * maxSize) / w);
+              w = maxSize;
+            }
+          } else {
+            if (h > maxSize) {
+              w = Math.round((w * maxSize) / h);
+              h = maxSize;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, w);
+          canvas.height = Math.max(1, h);
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, w, h);
+          }
+          URL.revokeObjectURL(objectUrl);
+          const dataUrl = canvas.toDataURL(mimeType, quality);
+          resolve(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl);
+        } catch (err) {
+          URL.revokeObjectURL(objectUrl);
+          reject(err);
+        }
       };
-      img.onerror = reject;
-    };
-    reader.onerror = reject;
-  });
+      img.onerror = (e) => {
+        URL.revokeObjectURL(objectUrl);
+        reject(e);
+      };
+      img.src = objectUrl;
+    });
+  } catch (error) {
+    console.error("resizeImage error, falling back to FileReader:", error);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.includes(',') ? result.split(',')[1] : result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
 };
 
 export interface PaddingInfo {

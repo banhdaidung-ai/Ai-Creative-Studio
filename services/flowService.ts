@@ -58,12 +58,14 @@ export interface FlowGenerateVideoOptions {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function base64ToFile(base64: string, mime: string, filename: string): File {
-  const arr = base64.split(',');
-  const bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
-  let n = bstr.length;
-  const u8arr = new Uint8Array(n);
-  while (n--) u8arr[n] = bstr.charCodeAt(n);
-  return new File([u8arr], filename, { type: mime });
+  const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
+  const byteString = atob(cleanBase64);
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  return new File([ab], filename, { type: mime });
 }
 
 export function getFlowApiUrl(endpoint: string): string {

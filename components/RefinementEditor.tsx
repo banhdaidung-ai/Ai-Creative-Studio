@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Stage, Layer, Line, Circle, Image as KonvaImage } from 'react-konva';
 import { X, Eraser, Paintbrush, RotateCcw, Check, Loader2, Sparkles, Undo2, ZoomIn, ZoomOut, Maximize2, MousePointer2, Wand2, Shirt, User, Image as ImageIcon, Upload, Plus, Trash2, Eye, EyeOff, Scissors, FlipHorizontal } from 'lucide-react';
 import { GeminiService } from '../services/gemini';
+import { resizeImage } from '../utils/image';
 
 const geminiService = new GeminiService();
 
@@ -308,18 +309,18 @@ const RefinementEditor: React.FC<RefinementEditorProps> = ({ image, onSave, onCl
     onSave(maskBase64, prompt, referenceImages);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
 
-    Array.from(files).forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const base64 = event.target?.result as string;
-            setReferenceImages(prev => [...prev, base64.split(',')[1]]);
-        };
-        reader.readAsDataURL(file);
-    });
+    try {
+      const resized = await Promise.all(
+        Array.from(files).map(file => resizeImage(file, 1280, 'image/jpeg', 0.85))
+      );
+      setReferenceImages(prev => [...prev, ...resized]);
+    } catch (err) {
+      console.error("Error reading reference images:", err);
+    }
   };
 
   const removeReferenceImage = (index: number) => {

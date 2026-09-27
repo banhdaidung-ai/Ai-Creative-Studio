@@ -50,15 +50,25 @@ function proxyToFlowBackend(
   const isHttps = backendUrl.protocol === 'https:';
   const transport = isHttps ? https : http;
 
+  const headers = { ...req.headers };
+  delete headers.host;
+
+  // Handle both pre-parsed JSON bodies and raw incoming streams
+  const hasParsedBody = req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+  let bodyBuffer: Buffer | null = null;
+  if (hasParsedBody) {
+    const jsonStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    bodyBuffer = Buffer.from(jsonStr);
+    headers['content-length'] = String(bodyBuffer.length);
+    headers['content-type'] = 'application/json';
+  }
+
   const options: http.RequestOptions = {
     hostname: backendUrl.hostname,
     port: backendUrl.port || (isHttps ? 443 : 80),
     path: backendUrl.pathname + backendUrl.search,
     method: req.method,
-    headers: {
-      ...req.headers,
-      host: backendUrl.host,
-    },
+    headers,
   };
 
   const proxyReq = transport.request(options, (proxyRes) => {
@@ -77,8 +87,13 @@ function proxyToFlowBackend(
     }
   });
 
-  // Pipe request body (supports multipart/form-data, JSON, etc.)
-  req.pipe(proxyReq, { end: true });
+  if (bodyBuffer) {
+    proxyReq.write(bodyBuffer);
+    proxyReq.end();
+  } else {
+    // Pipe raw request stream (supports multipart/form-data, stream JSON, etc.)
+    req.pipe(proxyReq, { end: true });
+  }
 }
 
 async function startServer() {
@@ -89,6 +104,22 @@ async function startServer() {
   if (PORT !== desiredPort) {
     console.log(`Port ${desiredPort} is in use. Falling back to port ${PORT}.`);
   }
+
+  // ── Google Flow Proxy endpoints ───────────────────────────────────────────
+  // CRITICAL: Mounted BEFORE express.json() so multipart & JSON streams aren't pre-consumed
+  app.all('/api/flow/*splat', (req, res) => {
+    const flowPath = req.path.replace('/api/flow', '');
+    let targetPath: string;
+    if (flowPath === '/health' || flowPath === '/') {
+      targetPath = flowPath;
+    } else {
+      targetPath = `/api${flowPath}`;
+    }
+
+    const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+    console.log(`[Flow Proxy] ${req.method} ${req.path} → ${FLOW_BACKEND_URL}${targetPath}${queryString}`);
+    proxyToFlowBackend(req, res, `${targetPath}${queryString}`);
+  });
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -110,29 +141,6 @@ async function startServer() {
       console.error('[GeminiService API Error]', error);
       res.status(500).json({ success: false, error: error.message });
     }
-  });
-
-  // ── Google Flow Proxy endpoints ───────────────────────────────────────────
-  // All /api/flow/* requests are forwarded to Python FastAPI backend on port 8000
-  app.all('/api/flow/*splat', (req, res) => {
-    // Strip /api/flow prefix → map to backend /api/* or root endpoints
-    const flowPath = req.path.replace('/api/flow', '');
-    
-    // Map paths: /api/flow/session-status → /api/session-status
-    //            /api/flow/generate-image → /api/generate-image
-    //            /api/flow/health         → /health
-    //            /api/flow/job/:id        → /api/job/:id
-    let targetPath: string;
-    if (flowPath === '/health' || flowPath === '/') {
-      targetPath = flowPath;
-    } else {
-      targetPath = `/api${flowPath}`;
-    }
-
-    const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-    
-    console.log(`[Flow Proxy] ${req.method} ${req.path} → ${FLOW_BACKEND_URL}${targetPath}${queryString}`);
-    proxyToFlowBackend(req, res, `${targetPath}${queryString}`);
   });
 
   // ── Vite / static serving ─────────────────────────────────────────────────

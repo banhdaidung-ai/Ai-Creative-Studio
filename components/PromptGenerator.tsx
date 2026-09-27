@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { geminiService } from '../services/gemini';
 import { Lightbulb, Upload, Wand2, Copy, Check, Loader2, AlertCircle, Sparkles } from 'lucide-react';
-import { fileToBase64 } from '../utils/image';
+import { fileToBase64, resizeImage } from '../utils/image';
+import { isFlowBackendAvailable, enhancePromptViaFlow } from '../services/flowService';
 
 interface CreativePrompt {
   title_vn: string;
@@ -79,7 +80,7 @@ const PromptGenerator: React.FC = () => {
     if (files) {
       try {
         const newImages = await Promise.all(
-          Array.from(files).map(file => fileToBase64(file))
+          Array.from(files).map(file => resizeImage(file, 1280, 'image/jpeg', 0.85))
         );
         setImages(prev => [...prev, ...newImages].slice(0, 3));
         setError(null);
@@ -95,7 +96,8 @@ const PromptGenerator: React.FC = () => {
       localStorage.getItem('google_account_pro') === 'true' || 
       localStorage.getItem('vertex_project_id')
     );
-    if (!apiKeySelected && !hasPro) {
+    const flowReady = await isFlowBackendAvailable().catch(() => false);
+    if (!apiKeySelected && !hasPro && !flowReady) {
       handleSelectKey();
       return;
     }
@@ -106,8 +108,43 @@ const PromptGenerator: React.FC = () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const result = await geminiService.generateCreativePrompts(idea, images);
-      setPrompts(result);
+      if (apiKeySelected || hasPro) {
+        try {
+          const result = await geminiService.generateCreativePrompts(idea, images);
+          setPrompts(result);
+          return;
+        } catch (geminiErr: any) {
+          console.warn("[PromptGenerator] Gemini failed, attempting Flow fallback...", geminiErr);
+          if (!flowReady) throw geminiErr;
+        }
+      }
+
+      // Google Flow prompt enhancement fallback
+      const baseIdea = idea.trim() || 'high-end fashion commercial studio photography';
+      const enhanced = await enhancePromptViaFlow(baseIdea, 'image');
+      setPrompts([
+        {
+          title_vn: 'Studio Thời Trang Chuyên Nghiệp',
+          title_en: 'Commercial Studio Fashion',
+          description_vn: 'Tối ưu ánh sáng phòng chụp tiêu chuẩn, tập trung làm nổi bật chất liệu vải và thần thái.',
+          prompt_en: `${enhanced}, commercial studio lighting, 8k resolution, photorealistic, sharp focus, high-end fashion magazine editorial`,
+          prompt_vn: `${idea || 'Ảnh thời trang chuyên nghiệp'} với ánh sáng studio tiêu chuẩn, độ chi tiết cao và phông nền tối giản.`
+        },
+        {
+          title_vn: 'Điện Ảnh Ngoài Trời (Cinematic)',
+          title_en: 'Cinematic Lifestyle',
+          description_vn: 'Ánh sáng vàng tự nhiên hoàng hôn với độ sâu trường ảnh mờ hậu cảnh ấn tượng.',
+          prompt_en: `Cinematic lifestyle portrait, golden hour natural sunlight, bokeh city background, ${enhanced}, 35mm film aesthetic, warm tones, masterpiece`,
+          prompt_vn: `Phong cách đời sống điện ảnh lúc hoàng hôn, ánh nắng ấm áp tự nhiên và độ mờ nền đẹp mắt.`
+        },
+        {
+          title_vn: 'Tối Giản Nghệ Thuật (Editorial Minimalist)',
+          title_en: 'Editorial Minimalist',
+          description_vn: 'Bố cục cân đối, tương phản tinh tế, phong cách tuần lễ thời trang Paris.',
+          prompt_en: `Avant-garde fashion editorial, minimalist architectural background, soft diffused lighting, ${enhanced}, neutral color palette, vogue cover style`,
+          prompt_vn: `Phong cách tối giản nghệ thuật cao cấp, đường nét kiến trúc tinh tế và ánh sáng tản mềm.`
+        }
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lỗi khi tạo gợi ý.");
     } finally {

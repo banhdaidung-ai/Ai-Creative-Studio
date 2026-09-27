@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { X, Bell, Calendar, Tag, ChevronRight, Zap, CheckCircle2 } from 'lucide-react';
+import React from 'react';
+import { X, Bell, Calendar, ChevronRight, CheckCircle2 } from 'lucide-react';
 
 export interface UpdateItem {
   id: string;

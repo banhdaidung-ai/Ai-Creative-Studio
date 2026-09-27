@@ -1,16 +1,16 @@
-
 import React, { useState, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { geminiService, MODEL_OPTIONS } from '../services/gemini';
-import { resizeImage, padImageToRatio, unpadImage } from '../utils/image';
+import { ModelSelector } from './ModelSelector';
+import AspectRatioSelector from './AspectRatioSelector';
+import { resizeImage, extractRatioFromPrompt } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
 import PhotoEditor from './PhotoEditor';
-import { ModelSelector } from './ModelSelector';
+import { useProject } from '../src/context/ProjectContext';
 import { 
-  Shirt, Upload, RefreshCw, Download, 
-  Lightbulb, Loader2, Maximize2, X, Layers, Zap, 
-  Trash2, Image as ImageIcon, CheckSquare, Square, DownloadCloud,
-  Key, RotateCcw, ZoomIn, ZoomOut, ShoppingBag, MessageSquare, Columns, Eye, Sparkles, Edit3,
-  CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Settings2, Plus, History, Clock, Crown, Sliders
+  Shirt, Sliders, RefreshCw, Maximize2, X, Loader2, Layers, 
+  CheckSquare, Square, Box, Columns, Eye, ZoomIn, ZoomOut, ChevronDown, Settings2, ChevronUp, Crown,
+  Plus, MessageSquare, DownloadCloud, Trash2, Zap, Image as ImageIcon, Sparkles
 } from 'lucide-react';
 
 interface GarmentJob {
@@ -18,6 +18,7 @@ interface GarmentJob {
   garmentBase64: string;
   resultBase64?: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
+  statusMessage?: string;
   prompt: string;
 }
 
@@ -38,8 +39,6 @@ const PROMPT_SUGGESTIONS = [
   { id: 'tight', label: 'Ôm body', text: "Wear this as a slim fit/tight fit. Accentuate the body silhouette." },
   { id: 'untucked', label: 'Thả ngoài', text: "Wear this untucked and relaxed. Casual style." }
 ];
-
-const supportedRatios = ["Auto", "1:1", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9"];
 
 const STORAGE_KEY = 'yody_batch_studio_state_v1';
 
@@ -73,6 +72,7 @@ const LazyImage: React.FC<{ src: string; className?: string; alt?: string }> = (
 };
 
 const BatchFashionStudio: React.FC = () => {
+  const { addToHistory, workspaceAsset, addToWorkspace } = useProject();
   const [modelImage, setModelImage] = useState<string | null>(null);
   const [jobs, setJobs] = useState<GarmentJob[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -83,19 +83,24 @@ const BatchFashionStudio: React.FC = () => {
   const [isDraggingGarment, setIsDraggingGarment] = useState(false);
   
   const [history, setHistory] = useState<BatchHistoryItem[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
 
   const [timer, setTimer] = useState(0);
 
-  const [modelTier, setModelTier] = useState<'standard' | 'pro'>('pro');
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image-preview');
+  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
   const [imageSize, setImageSize] = useState('1K');
-  const [aspectRatio, setAspectRatio] = useState('Auto');
-  const [detectedRatio, setDetectedRatio] = useState('3:4');
+  const [aspectRatio, setAspectRatio] = useState('3:4');
   
   const [defaultPrompt, setDefaultPrompt] = useState<string>("Replace the model's outfit with this garment. Maintain photorealism and lighting.");
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const extracted = extractRatioFromPrompt(defaultPrompt);
+    if (extracted) {
+      setAspectRatio(extracted);
+    }
+  }, [defaultPrompt]);
   const [showConfig, setShowConfig] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Editor State
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
@@ -114,18 +119,67 @@ const BatchFashionStudio: React.FC = () => {
   const garmentInputRef = useRef<HTMLInputElement>(null);
   const isLoadedRef = useRef(false);
 
+  const getClosestRatio = (width: number, height: number): string => {
+    const target = width / height;
+    const ratios = [
+      { name: "1:1", val: 1 }, { name: "3:4", val: 3 / 4 }, { name: "4:3", val: 4 / 3 },
+      { name: "9:16", val: 9 / 16 }, { name: "16:9", val: 16 / 9 }
+    ];
+    return ratios.reduce((prev, curr) => 
+      Math.abs(curr.val - target) < Math.abs(prev.val - target) ? curr : prev
+    ).name;
+  };
+
+  const processModelFile = React.useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = objectUrl;
+    img.onload = () => {
+        const closest = getClosestRatio(img.width, img.height);
+        setAspectRatio(closest);
+        URL.revokeObjectURL(objectUrl);
+    };
+    const base64 = await resizeImage(file);
+    setModelImage(base64);
+  }, []);
+
+  const processGarmentFiles = React.useCallback(async (files: FileList | File[]) => {
+      const newJobs: GarmentJob[] = [];
+      for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (!file.type.startsWith('image/')) continue;
+          const base64 = await resizeImage(file);
+          newJobs.push({
+              id: Math.random().toString(36).substring(7),
+              garmentBase64: base64,
+              status: 'pending',
+              prompt: defaultPrompt 
+          });
+      }
+      setJobs(prev => [...prev, ...newJobs]);
+      if (!focusedJobId && newJobs.length > 0) setFocusedJobId(newJobs[0].id);
+      if (window.innerWidth < 1024) setShowConfig(false); 
+  }, [defaultPrompt, focusedJobId]);
+
   const jobsRef = useRef<GarmentJob[]>(jobs);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
 
   useEffect(() => {
     const initData = async () => {
         try {
-            const savedState = await loadState(STORAGE_KEY);
+            const savedState = await loadState(STORAGE_KEY) as any;
             if (savedState) {
                 if (savedState.modelImage) setModelImage(savedState.modelImage);
-                if (savedState.jobs) setJobs(savedState.jobs);
+                if (savedState.jobs) {
+                    // Reset any 'processing' jobs back to 'pending' on restore
+                    const restoredJobs = savedState.jobs.map((j: GarmentJob) => 
+                        j.status === 'processing' ? { ...j, status: 'pending', statusMessage: '' } : j
+                    );
+                    setJobs(restoredJobs);
+                }
                 if (savedState.defaultPrompt) setDefaultPrompt(savedState.defaultPrompt);
-                if (savedState.modelTier) setModelTier(savedState.modelTier);
+                if (savedState.selectedModelId) setSelectedModelId(savedState.selectedModelId);
                 if (savedState.imageSize) setImageSize(savedState.imageSize);
                 if (savedState.aspectRatio) setAspectRatio(savedState.aspectRatio);
                 if (savedState.history) setHistory(savedState.history);
@@ -147,20 +201,26 @@ const BatchFashionStudio: React.FC = () => {
           modelImage,
           jobs,
           defaultPrompt,
-          modelTier,
+          modelId: selectedModelId,
           imageSize,
           aspectRatio,
           history: history.slice(0, 50) 
         };
         await saveState(STORAGE_KEY, stateToSave);
-      } catch (e) {}
+      } catch {
+        // Ignore error
+      }
     }, 1000); 
     return () => clearTimeout(timeoutId);
-  }, [modelImage, jobs, defaultPrompt, modelTier, imageSize, aspectRatio, history]);
+  }, [modelImage, jobs, defaultPrompt, selectedModelId, imageSize, aspectRatio, history]);
 
   useEffect(() => {
     const checkKey = async () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
             return;
         }
@@ -170,15 +230,18 @@ const BatchFashionStudio: React.FC = () => {
         }
     };
     checkKey();
-    
-    // Listen for storage changes
+
     const handleKeyUpdate = () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
+        } else if (window.aistudio?.hasSelectedApiKey) {
+            window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
         } else {
-            if (window.aistudio?.hasSelectedApiKey) {
-                window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
-            }
+            setApiKeySelected(false);
         }
     };
     window.addEventListener('storage', handleKeyUpdate);
@@ -234,61 +297,19 @@ const BatchFashionStudio: React.FC = () => {
     };
     window.addEventListener('paste', handleGlobalPaste);
     return () => window.removeEventListener('paste', handleGlobalPaste);
-  }, [modelImage]);
+  }, [modelImage, processModelFile, processGarmentFiles]);
 
   const handleSelectKey = async () => {
     if (window.aistudio?.openSelectKey) {
         try {
             await window.aistudio.openSelectKey();
             setApiKeySelected(true);
-        } catch (e) { console.error(e); }
-    }
-  };
-
-  const getClosestRatio = (width: number, height: number): string => {
-    const target = width / height;
-    const ratios = [
-      { name: "1:1", val: 1 }, { name: "3:4", val: 3 / 4 }, { name: "4:3", val: 4 / 3 },
-      { name: "9:16", val: 9 / 16 }, { name: "16:9", val: 16 / 9 }
-    ];
-    return ratios.reduce((prev, curr) => 
-      Math.abs(curr.val - target) < Math.abs(prev.val - target) ? curr : prev
-    ).name;
-  };
-
-  const processModelFile = async (file: File) => {
-    if (!file.type.startsWith('image/')) return;
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
-    img.src = objectUrl;
-    img.onload = () => {
-        const closest = getClosestRatio(img.width, img.height);
-        setDetectedRatio(closest);
-        if (aspectRatio === 'Auto') {
-          // Keep it as Auto, but detectedRatio is updated
+        } catch (e) { 
+            console.error(e); 
         }
-        URL.revokeObjectURL(objectUrl);
-    };
-    const base64 = await resizeImage(file);
-    setModelImage(base64);
-  };
-
-  const processGarmentFiles = async (files: FileList | File[]) => {
-      const newJobs: GarmentJob[] = [];
-      for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          if (!file.type.startsWith('image/')) continue;
-          const base64 = await resizeImage(file);
-          newJobs.push({
-              id: Math.random().toString(36).substring(7),
-              garmentBase64: base64,
-              status: 'pending',
-              prompt: defaultPrompt 
-          });
-      }
-      setJobs(prev => [...prev, ...newJobs]);
-      if (!focusedJobId && newJobs.length > 0) setFocusedJobId(newJobs[0].id);
-      if (window.innerWidth < 1024) setShowConfig(false); 
+    } else {
+        toast.info('Vui lòng kích hoạt Pro bằng tài khoản Google hoặc nhập API Key tại nút Unlock Pro bên góc trái!');
+    }
   };
 
   const handleModelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -329,30 +350,29 @@ const BatchFashionStudio: React.FC = () => {
     const job = jobsRef.current.find(j => j.id === jobId);
     if (!job || !modelImage) return;
 
-    if (modelTier === 'pro' && !apiKeySelected) {
+    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
         handleSelectKey();
         return;
     }
 
-    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'processing' } : j));
+    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'processing', statusMessage: 'Đang khởi tạo...' } : j));
 
     try {
-        const finalRatio = aspectRatio === 'Auto' ? detectedRatio : aspectRatio;
-        
-        // Pad image to match the target ratio exactly before sending to AI
-        const { base64: processedModelImage, info: paddingInfo } = await padImageToRatio(modelImage, finalRatio);
+        // Simulate status updates for better UX
+        const statusUpdate = (msg: string) => {
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, statusMessage: msg } : j));
+        };
 
-        let result = await geminiService.editImage(
-            processedModelImage,
+        setTimeout(() => statusUpdate('Đang phân tích trang phục...'), 1500);
+        setTimeout(() => statusUpdate('Đang ghép vào người mẫu...'), 3500);
+        setTimeout(() => statusUpdate('Đang xử lý ánh sáng...'), 6000);
+
+        const result = await geminiService.editImage(
+            modelImage,
             job.prompt, 
             [job.garmentBase64],
-            { modelTier, aspectRatio: finalRatio, imageSize, modelId: selectedModelId }
+            { modelId: selectedModelId, aspectRatio, imageSize }
         );
-
-        if (result && paddingInfo) {
-            // Unpad (crop) the result back to original dimensions
-            result = await unpadImage(result, paddingInfo);
-        }
 
         if (result) {
             setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'completed', resultBase64: result } : j));
@@ -365,21 +385,28 @@ const BatchFashionStudio: React.FC = () => {
               garmentImage: job.garmentBase64,
               resultBase64: result,
               prompt: job.prompt,
-              aspectRatio: finalRatio
+              aspectRatio: aspectRatio
             };
             setHistory(prev => [historyItem, ...prev]);
+            
+            // Add to global history
+            addToHistory({
+              url: `data:image/png;base64,${result}`,
+              prompt: job.prompt,
+              mode: 'BATCH_FASHION'
+            });
         } else {
             throw new Error("No result");
         }
-    } catch (e) {
+    } catch (err) {
         setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error' } : j));
     }
   };
 
   const generateAll = async () => {
     if (!modelImage) return;
-    const hasManualKey = !!localStorage.getItem('gemini_api_key');
-    if (modelTier === 'pro' && !apiKeySelected && !hasManualKey) { handleSelectKey(); return; }
+    const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
+    if (selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
     setIsProcessing(true);
     if (window.innerWidth < 1024) setShowConfig(false);
     const pendingIds = jobs.filter(j => j.status === 'pending' || j.status === 'error').map(j => j.id);
@@ -439,6 +466,25 @@ const BatchFashionStudio: React.FC = () => {
       }
   };
 
+  const handleAutoTag = async () => {
+    const targetJob = jobs.find(j => j.id === focusedJobId);
+    if (!targetJob && !modelImage) return;
+    
+    setIsAnalyzing(true);
+    try {
+      // Analyze the garment if a job is focused, otherwise analyze the model
+      const imageToAnalyze = targetJob ? targetJob.garmentBase64 : modelImage;
+      if (imageToAnalyze) {
+        const prompt = await geminiService.analyzeFashionImage(imageToAnalyze);
+        if (prompt) handlePromptChange(prompt);
+      }
+    } catch (err) {
+      console.error("Auto-tag failed", err);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
     if (previewImage && !isComparing) {
         e.stopPropagation();
@@ -449,27 +495,23 @@ const BatchFashionStudio: React.FC = () => {
     }
   };
 
-  const startDrag = (e: React.MouseEvent | React.TouchEvent) => {
+  const startDrag = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isComparing) {
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
         if (zoom > 1) {
             e.preventDefault();
             setIsDraggingPreview(true);
-            setDragStart({ x: clientX - pan.x, y: clientY - pan.y });
+            setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
         } else {
             setZoom(2); 
         }
     }
   };
 
-  const onDrag = (e: React.MouseEvent | React.TouchEvent) => {
+  const onDrag = (e: React.MouseEvent) => {
     if (!isComparing && isDraggingPreview && zoom > 1) {
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
         e.preventDefault();
-        setPan({ x: clientX - dragStart.x, y: clientY - dragStart.y });
+        setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     }
   };
 
@@ -477,17 +519,12 @@ const BatchFashionStudio: React.FC = () => {
     setIsDraggingPreview(false);
   };
 
-  const handleSliderMove = (e: React.MouseEvent | React.TouchEvent) => {
+    const handleSliderMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!comparisonRef.current) return;
     e.stopPropagation();
     const rect = comparisonRef.current.getBoundingClientRect();
-    let x = 0;
-    if ('touches' in e) {
-        x = e.touches[0].clientX - rect.left;
-    } else {
-        x = (e as React.MouseEvent).clientX - rect.left;
-    }
-    const position = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    const xPos = ('touches' in e) ? e.touches[0].clientX - rect.left : (e as React.MouseEvent).clientX - rect.left;
+    const position = Math.max(0, Math.min(100, (xPos / rect.width) * 100));
     setSliderPosition(position);
   };
 
@@ -502,8 +539,7 @@ const BatchFashionStudio: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col p-2 md:p-4 overflow-hidden">
-      {/* ... (Render code unchanged) ... */}
+    <div className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden">
       <div className="mb-2 md:mb-4 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 md:p-2.5 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 shadow-lg shadow-purple-500/30">
@@ -532,18 +568,10 @@ const BatchFashionStudio: React.FC = () => {
             {/* Config Section */}
             {showConfig && (
                 <div className="flex flex-col gap-3 md:gap-4 animate-in slide-in-from-top-2 duration-300 overflow-y-auto no-scrollbar">
-                    <ModelSelector 
-                        selectedModelId={selectedModelId}
-                        onModelSelect={(id) => {
-                            setSelectedModelId(id);
-                            const model = MODEL_OPTIONS.find(m => m.id === id);
-                            if (model) setModelTier(model.tier as any);
-                            if (id.includes('pro') && !apiKeySelected) handleSelectKey();
-                        }}
-                    />
+                    <ModelSelector selectedModelId={selectedModelId} onModelSelect={setSelectedModelId} />
 
-                    <div className={`grid ${modelTier === 'pro' ? 'grid-cols-2' : 'grid-cols-1'} gap-2 transition-all duration-300`}>
-                        {modelTier === 'pro' && (
+                    <div className={`grid ${MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' ? 'grid-cols-2' : 'grid-cols-1'} gap-2 transition-all duration-300`}>
+                        {MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && (
                             <div className="space-y-1.5 animate-in fade-in slide-in-from-left-2">
                                 <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">Độ phân giải</label>
                                 <div className="relative group">
@@ -559,22 +587,48 @@ const BatchFashionStudio: React.FC = () => {
                             </div>
                         )}
                         <div className="space-y-1.5">
-                            <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">Tỷ lệ khung hình</label>
-                            <div className="relative group">
-                                <select 
-                                    value={aspectRatio} 
-                                    onChange={(e) => setAspectRatio(e.target.value)}
-                                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-[1.2rem] py-2.5 px-4 text-[10px] font-black text-purple-600 dark:text-purple-400 outline-none appearance-none cursor-pointer focus:ring-2 focus:ring-purple-500/20 transition-all"
-                                >
-                                    {supportedRatios.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
-                                </select>
-                                <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none group-hover:text-purple-500 transition-colors" />
-                            </div>
+                            <AspectRatioSelector 
+                                value={aspectRatio}
+                                onChange={setAspectRatio}
+                                hasImage={!!modelImage}
+                                onAutoDetect={() => {
+                                    if (modelImage) {
+                                        const img = new Image();
+                                        img.onload = () => {
+                                            const w = img.width;
+                                            const h = img.height;
+                                            const ratios = ["1:1", "3:4", "4:3", "2:3", "3:2", "4:5", "5:4", "9:16", "16:9"];
+                                            let closestRatio = "1:1";
+                                            let minDiff = Infinity;
+                                            ratios.forEach(r => {
+                                                const [rw, rh] = r.split(':').map(Number);
+                                                const diff = Math.abs((w/h) - (rw/rh));
+                                                if (diff < minDiff) {
+                                                    minDiff = diff;
+                                                    closestRatio = r;
+                                                }
+                                            });
+                                            setAspectRatio(closestRatio);
+                                        };
+                                        img.src = `data:image/png;base64,${modelImage}`;
+                                    }
+                                }}
+                            />
                         </div>
                     </div>
 
                     <div className="space-y-1.5">
-                        <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2 hidden lg:block">1. Ảnh Mẫu Gốc (Model)</label>
+                        <div className="flex justify-between items-center px-1">
+                            <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest hidden lg:block">1. Ảnh Mẫu Gốc (Model)</label>
+                            {workspaceAsset && (
+                                <button 
+                                    onClick={() => setModelImage(workspaceAsset.url.split(',')[1])}
+                                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wide bg-purple-500/10 text-purple-600 hover:bg-purple-500/20 transition-all"
+                                >
+                                    <Box size={10} /> Load Workspace
+                                </button>
+                            )}
+                        </div>
                         <div 
                             onClick={() => modelInputRef.current?.click()} 
                             onDragOver={(e) => handleDragOver(e, 'model')}
@@ -595,7 +649,17 @@ const BatchFashionStudio: React.FC = () => {
                     </div>
                     
                     <div className="space-y-1.5">
-                        <div className="flex justify-between items-center px-1"><label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><MessageSquare className="w-3 h-3" /> Prompt</label></div>
+                        <div className="flex justify-between items-center px-1">
+                            <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><MessageSquare className="w-3 h-3" /> Prompt</label>
+                            <button 
+                                onClick={handleAutoTag}
+                                disabled={isAnalyzing || (!focusedJobId && !modelImage)}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wide transition-all ${isAnalyzing ? 'bg-purple-500/20 text-purple-400 animate-pulse' : 'bg-purple-500/10 text-purple-500 hover:bg-purple-500/20'}`}
+                            >
+                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                                {isAnalyzing ? 'Analyzing...' : 'Auto-Tag'}
+                            </button>
+                        </div>
                         
                         {/* Prompt Suggestions Chips */}
                         <div className="flex flex-wrap gap-1.5 pb-1">
@@ -610,7 +674,7 @@ const BatchFashionStudio: React.FC = () => {
                             ))}
                         </div>
 
-                        <textarea value={activePrompt} onChange={(e) => handlePromptChange(e.target.value)} className="w-full p-2.5 text-[10px] md:text-xs bg-black/10 dark:bg-black/20 border border-white/5 rounded-xl outline-none resize-none h-14 md:h-16 text-white dark:text-white shadow-inner" placeholder="Mô tả..." />
+                        <textarea value={activePrompt} onChange={(e) => handlePromptChange(e.target.value)} className="w-full p-2.5 text-[10px] md:text-xs bg-black/10 dark:bg-black/20 border border-white/5 rounded-xl outline-none resize-none h-14 md:h-16 text-slate-900 dark:text-white shadow-inner" placeholder="Mô tả..." />
                     </div>
                 </div>
             )}
@@ -700,6 +764,20 @@ const BatchFashionStudio: React.FC = () => {
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-2">
                                                     <button onClick={() => setPreviewImage(job.resultBase64!)} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10 shadow-lg"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>
+                                                    <button 
+                                                        onClick={(e) => { 
+                                                            e.stopPropagation(); 
+                                                            addToWorkspace({
+                                                                url: `data:image/png;base64,${job.resultBase64}`,
+                                                                prompt: job.prompt,
+                                                                mode: 'BATCH_FASHION'
+                                                            });
+                                                        }} 
+                                                        className="p-1.5 bg-amber-500/80 backdrop-blur-md rounded-xl text-white hover:bg-amber-500 border border-white/10 shadow-lg" 
+                                                        title="Gửi vào Workspace"
+                                                    >
+                                                        <Box className="w-3 h-3 md:w-4 md:h-4" />
+                                                    </button>
                                                     <button onClick={(e) => { e.stopPropagation(); setEditingJobId(job.id); }} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10 shadow-lg" title="Chỉnh sửa màu/ánh sáng"><Sliders className="w-3 h-3 md:w-4 md:h-4" /></button>
                                                     <button onClick={(e) => { e.stopPropagation(); generateJob(job.id); }} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10 shadow-lg"><RefreshCw className="w-3 h-3 md:w-4 md:h-4" /></button>
                                                 </div>
@@ -710,7 +788,23 @@ const BatchFashionStudio: React.FC = () => {
                                         <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-black/40">
                                             <div className={`absolute inset-0 transition-all ${job.status === 'processing' ? 'opacity-30 blur-sm scale-110' : 'opacity-20 blur-xl'}`}><img src={`data:image/png;base64,${job.garmentBase64}`} className="w-full h-full object-cover" /></div>
                                             <div className="relative z-10 flex flex-col items-center">
-                                                {job.status === 'processing' ? (<div className="flex flex-col items-center bg-black/40 p-3 rounded-2xl backdrop-blur-md border border-white/10 shadow-xl"><Loader2 className="w-5 h-5 md:w-6 md:h-6 text-purple-400 animate-spin mb-2" /><span className="text-[9px] font-black uppercase text-purple-200 tracking-widest">Processing</span></div>) : (<><Layers className="w-6 h-6 md:w-8 md:h-8 text-slate-500 mb-2 opacity-50" /><span className="text-[8px] md:text-[9px] font-black uppercase text-slate-500 tracking-widest">Wait</span></>)}
+                                                {job.status === 'processing' ? (
+                                                    <div className="flex flex-col items-center bg-black/40 p-4 rounded-3xl backdrop-blur-md border border-white/10 shadow-2xl min-w-[140px] animate-in zoom-in-95">
+                                                        <div className="relative mb-3">
+                                                            <Loader2 className="w-6 h-6 md:w-8 md:h-8 text-purple-500 animate-spin" />
+                                                            <div className="absolute inset-0 bg-purple-500/20 blur-xl rounded-full animate-pulse"></div>
+                                                        </div>
+                                                        <span className="text-[9px] md:text-[10px] font-black uppercase text-white tracking-[0.2em] mb-1 text-center leading-tight">{job.statusMessage || 'Processing'}</span>
+                                                        <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden mt-2">
+                                                            <div className="h-full bg-purple-500 animate-progress"></div>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex flex-col items-center opacity-40">
+                                                        <Layers className="w-6 h-6 md:w-8 md:h-8 text-slate-400 mb-2" />
+                                                        <span className="text-[8px] md:text-[9px] font-black uppercase text-slate-400 tracking-widest">Đang chờ...</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}
@@ -728,8 +822,8 @@ const BatchFashionStudio: React.FC = () => {
 
       {/* Preview Modal */}
       {previewImage && (
-        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 md:p-6 animate-in fade-in duration-300 pb-[env(safe-area-inset-bottom)]" onClick={() => setPreviewImage(null)}>
-            <button className="absolute top-4 right-4 md:top-8 md:right-8 z-[110] text-white/60 hover:text-white bg-white/10 p-2 md:p-3 rounded-2xl border border-white/10 shadow-xl active:scale-90 transition-transform"><X className="w-6 h-6" /></button>
+        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 md:p-6 animate-in fade-in duration-300" onClick={() => setPreviewImage(null)}>
+            <button className="absolute top-4 right-4 md:top-8 md:right-8 z-[110] text-white/60 hover:text-white bg-white/10 p-2 md:p-3 rounded-2xl border border-white/10 shadow-xl"><X className="w-6 h-6" /></button>
             <div 
                 className="relative flex items-center justify-center w-full h-full" 
                 onClick={(e) => e.stopPropagation()}
@@ -738,15 +832,16 @@ const BatchFashionStudio: React.FC = () => {
                 onMouseMove={onDrag}
                 onMouseUp={endDrag}
                 onMouseLeave={endDrag}
-                onTouchStart={startDrag}
-                onTouchMove={onDrag}
-                onTouchEnd={endDrag}
             >
                 {isComparing && modelImage ? (
                     <div ref={comparisonRef} className="relative w-full h-full max-h-[85vh] object-contain rounded-[1rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] border border-white/10 overflow-hidden cursor-col-resize select-none" style={{ aspectRatio: aspectRatio.replace(':', '/') }} onMouseMove={handleSliderMove} onTouchMove={handleSliderMove}>
                         <img src={`data:image/png;base64,${previewImage}`} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                         <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}><img src={`data:image/png;base64,${modelImage}`} className="absolute inset-0 w-full h-full object-contain" /></div>
                         <div className="absolute inset-y-0 w-1 bg-white/80 z-20 pointer-events-none" style={{ left: `${sliderPosition}%` }}><div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center shadow-2xl border-2 border-purple-900"><Columns className="w-4 h-4 text-purple-900" /></div></div>
+                        
+                        {/* Labels */}
+                        <div className="absolute top-4 left-4 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full text-[8px] font-black text-white uppercase tracking-widest z-30">Trước</div>
+                        <div className="absolute top-4 right-4 px-3 py-1 bg-blue-600/60 backdrop-blur-md rounded-full text-[8px] font-black text-white uppercase tracking-widest z-30">Sau</div>
                     </div>
                 ) : (
                     <img 

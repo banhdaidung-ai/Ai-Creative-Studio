@@ -1,12 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { geminiService, MODEL_OPTIONS } from '../services/gemini';
-import { resizeImage, padImageToRatio, unpadImage } from '../utils/image';
 import { ModelSelector } from './ModelSelector';
+import { resizeImage } from '../utils/image';
+import MaskDrawEditor from './MaskDrawEditor';
+import AspectRatioSelector from './AspectRatioSelector';
 import { 
-  UserCircle, Shirt, Layers, X, RotateCcw, 
-  ImageIcon, Download, Columns, Eye, Zap, 
-  Loader2, Maximize2, Key, History, Clock,
-  Plus, CheckCircle2, ChevronDown, Wand2, Settings2, ChevronUp, Crown
+  UserCircle, Shirt, Layers, X, 
+  Download, Columns, Eye, Zap, 
+  Loader2, PenTool,
+  Plus, ChevronDown, Wand2, Settings2, ChevronUp, Crown
 } from 'lucide-react';
 
 interface TryOnJob {
@@ -23,6 +26,8 @@ const VirtualTryOn: React.FC = () => {
   const [topRef, setTopRef] = useState<string | null>(null);
   const [bottomRef, setBottomRef] = useState<string | null>(null);
   const [accessoryRef, setAccessoryRef] = useState<string | null>(null);
+  const [maskImage, setMaskImage] = useState<string | null>(null);
+  const [showMaskEditor, setShowMaskEditor] = useState(false);
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timer, setTimer] = useState(0);
@@ -32,8 +37,7 @@ const VirtualTryOn: React.FC = () => {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [showConfig, setShowConfig] = useState(true);
   
-  const [modelTier, setModelTier] = useState<'standard' | 'pro'>('pro');
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image-preview');
+  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
   const [imageSize, setImageSize] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('3:4');
 
@@ -45,7 +49,11 @@ const VirtualTryOn: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
             return;
         }
@@ -55,15 +63,18 @@ const VirtualTryOn: React.FC = () => {
         }
     };
     checkKey();
-    
-    // Listen for storage changes
+
     const handleKeyUpdate = () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
+        } else if (window.aistudio?.hasSelectedApiKey) {
+            window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
         } else {
-            if (window.aistudio?.hasSelectedApiKey) {
-                window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
-            }
+            setApiKeySelected(false);
         }
     };
     window.addEventListener('storage', handleKeyUpdate);
@@ -90,6 +101,8 @@ const VirtualTryOn: React.FC = () => {
             await window.aistudio.openSelectKey();
             setApiKeySelected(true);
         } catch (e) { console.error(e); }
+    } else {
+        toast.info('Vui lòng kích hoạt Pro bằng tài khoản Google hoặc nhập API Key tại nút Unlock Pro bên góc trái!');
     }
   };
 
@@ -110,8 +123,7 @@ const VirtualTryOn: React.FC = () => {
       return;
     }
 
-    const hasManualKey = !!localStorage.getItem('gemini_api_key');
-    if (modelTier === 'pro' && !apiKeySelected && !hasManualKey) {
+    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
       handleSelectKey();
       return;
     }
@@ -121,8 +133,8 @@ const VirtualTryOn: React.FC = () => {
     if (window.innerWidth < 1024) setShowConfig(false);
 
     // Construct highly specialized prompt
-    let outfitDesc = [];
-    let refs = [];
+    const outfitDesc = [];
+    const refs = [];
     if (topRef) {
         outfitDesc.push("the jacket/top from the first product reference image");
         refs.push(topRef);
@@ -136,27 +148,24 @@ const VirtualTryOn: React.FC = () => {
         refs.push(accessoryRef);
     }
 
-    const prompt = `Replace the existing outfit on the model with exactly: ${outfitDesc.join(' and ')}. 
+    let prompt = `Replace the existing outfit on the model with exactly: ${outfitDesc.join(' and ')}. 
     REQUIREMENTS:
     1. Perfect Edge isolation: The new garments must be isolated perfectly onto the model's body with smooth, sharp edges.
     2. Zero White Halo: Ensure no artifacts or white lines appear between the model and the background.
     3. Material Fidelity: Preserve the exact textures (denim, wool, etc.) and colors from the reference product photos.
     4. Integration: Naturally integrate shadows and folds based on the model's pose and original lighting.`;
 
-    try {
-      // Pad image to match the target ratio exactly before sending to AI
-      const { base64: processedModelImage, info: paddingInfo } = await padImageToRatio(modelImage, aspectRatio);
+    if (maskImage) {
+        refs.push(maskImage);
+        prompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
+    }
 
-      let result = await geminiService.editImage(processedModelImage, prompt, refs, {
-        modelTier,
+    try {
+      const result = await geminiService.editImage(modelImage, prompt, refs, {
+        modelId: selectedModelId,
         aspectRatio,
         imageSize
       });
-
-      if (result && paddingInfo) {
-        // Unpad (crop) the result back to original dimensions
-        result = await unpadImage(result, paddingInfo);
-      }
 
       if (result) {
         setResultImage(result);
@@ -173,8 +182,8 @@ const VirtualTryOn: React.FC = () => {
   const handleSliderMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!comparisonRef.current) return;
     const rect = comparisonRef.current.getBoundingClientRect();
-    let x = ('touches' in e) ? e.touches[0].clientX - rect.left : (e as React.MouseEvent).clientX - rect.left;
-    setSliderPosition(Math.max(0, Math.min(100, (x / rect.width) * 100)));
+    const xPos = ('touches' in e) ? e.touches[0].clientX - rect.left : (e as React.MouseEvent).clientX - rect.left;
+    setSliderPosition(Math.max(0, Math.min(100, (xPos / rect.width) * 100)));
   };
 
   const Dropzone = ({ label, icon: Icon, image, onClear, onClick, sublabel }: any) => (
@@ -207,7 +216,7 @@ const VirtualTryOn: React.FC = () => {
   );
 
   return (
-    <div className="h-full flex flex-col p-2 md:p-4 overflow-hidden">
+    <div className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden">
       <div className="mb-3 md:mb-5 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 md:p-2.5 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 shadow-lg shadow-indigo-500/30">
@@ -236,17 +245,10 @@ const VirtualTryOn: React.FC = () => {
 
                 {showConfig && (
                     <div className="flex flex-col gap-4 overflow-y-auto no-scrollbar flex-1">
-                        <ModelSelector 
-                            selectedModelId={selectedModelId}
-                            onModelSelect={(id) => {
-                                setSelectedModelId(id);
-                                const model = MODEL_OPTIONS.find(m => m.id === id);
-                                if (model) setModelTier(model.tier as any);
-                                if (id.includes('pro') && !apiKeySelected) handleSelectKey();
-                            }}
-                        />
+                        {/* Model Selection */}
+                        <ModelSelector selectedModelId={selectedModelId} onModelSelect={setSelectedModelId} />
 
-                        {modelTier === 'pro' && (
+                        {MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && (
                             <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
                                 <label className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-1">Độ phân giải</label>
                                 <div className="flex bg-black/10 dark:bg-black/20 p-1 rounded-xl">
@@ -265,27 +267,54 @@ const VirtualTryOn: React.FC = () => {
                         
                         {/* Aspect Ratio */}
                         <div className="space-y-1.5">
-                            <div className="space-y-1">
-                                <label className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-1">Tỷ lệ</label>
-                                <select 
-                                    value={aspectRatio} 
-                                    onChange={(e) => setAspectRatio(e.target.value)}
-                                    className="w-full bg-black/10 dark:bg-black/20 text-[9px] font-black text-white dark:text-white rounded-xl border-none outline-none px-2 py-2 uppercase"
-                                >
-                                    {["3:4", "4:3", "1:1", "9:16", "16:9"].map(r => <option key={r} value={r}>{r}</option>)}
-                                </select>
-                            </div>
+                            <AspectRatioSelector 
+                                value={aspectRatio}
+                                onChange={setAspectRatio}
+                                hasImage={!!modelImage}
+                                onAutoDetect={() => {
+                                    if (modelImage) {
+                                        const img = new Image();
+                                        img.onload = () => {
+                                            const w = img.width;
+                                            const h = img.height;
+                                            const ratios = ["1:1", "3:4", "4:3", "2:3", "3:2", "4:5", "5:4", "9:16", "16:9"];
+                                            let closestRatio = "1:1";
+                                            let minDiff = Infinity;
+                                            ratios.forEach(r => {
+                                                const [rw, rh] = r.split(':').map(Number);
+                                                const diff = Math.abs((w/h) - (rw/rh));
+                                                if (diff < minDiff) {
+                                                    minDiff = diff;
+                                                    closestRatio = r;
+                                                }
+                                            });
+                                            setAspectRatio(closestRatio);
+                                        };
+                                        img.src = `data:image/png;base64,${modelImage}`;
+                                    }
+                                }}
+                            />
                         </div>
 
-                        {/* Dropzones */}
-                        <Dropzone 
-                            label="1. Người Mẫu (Body)" 
-                            icon={UserCircle} 
-                            image={modelImage} 
-                            onClear={() => setModelImage(null)} 
-                            onClick={() => modelInputRef.current?.click()} 
-                            sublabel="Ảnh toàn thân"
-                        />
+                        <div className="relative">
+                            <Dropzone 
+                                label="1. Người Mẫu (Body)" 
+                                icon={UserCircle} 
+                                image={modelImage} 
+                                onClear={() => { setModelImage(null); setMaskImage(null); }} 
+                                onClick={() => modelInputRef.current?.click()} 
+                                sublabel="Ảnh toàn thân"
+                            />
+                            {modelImage && (
+                                <button 
+                                    onClick={() => setShowMaskEditor(true)}
+                                    className={`absolute top-2 right-10 p-1.5 rounded-lg text-[9px] font-bold flex items-center gap-1 shadow-md transition-all ${maskImage ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-800/80 backdrop-blur-md text-blue-400 border border-blue-500/30 hover:bg-slate-700/80'}`}
+                                >
+                                    <PenTool className="w-3.5 h-3.5" />
+                                    {maskImage ? 'Sửa Mask' : ' Vẽ Mask'}
+                                </button>
+                            )}
+                        </div>
 
                         <div className="grid grid-cols-2 gap-2">
                             <Dropzone 
@@ -405,6 +434,14 @@ const VirtualTryOn: React.FC = () => {
       <input type="file" ref={topInputRef} onChange={(e) => { if(e.target.files?.[0]) processFile(e.target.files[0], 'top') }} accept="image/*" className="hidden" />
       <input type="file" ref={bottomInputRef} onChange={(e) => { if(e.target.files?.[0]) processFile(e.target.files[0], 'bottom') }} accept="image/*" className="hidden" />
       <input type="file" ref={accessoryInputRef} onChange={(e) => { if(e.target.files?.[0]) processFile(e.target.files[0], 'accessory') }} accept="image/*" className="hidden" />
+      
+      {showMaskEditor && modelImage && (
+          <MaskDrawEditor 
+              imageSrc={modelImage}
+              onSave={(maskStr) => { setMaskImage(maskStr); setShowMaskEditor(false); }}
+              onCancel={() => setShowMaskEditor(false)}
+          />
+      )}
       
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }`}</style>
     </div>

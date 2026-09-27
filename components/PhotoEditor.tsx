@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Check, RotateCw, FlipHorizontal, FlipVertical, Download, Sliders, Undo, Image as ImageIcon } from 'lucide-react';
+import { X, Check, RotateCw, FlipHorizontal, FlipVertical, Sliders, Undo } from 'lucide-react';
 
 interface PhotoEditorProps {
   imageSrc: string;
@@ -15,6 +15,7 @@ const PhotoEditor: React.FC<PhotoEditorProps> = ({ imageSrc, onSave, onClose }) 
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
   const [saturation, setSaturation] = useState(100);
+  const [hueRotate, setHueRotate] = useState(0);
   const [grayscale, setGrayscale] = useState(0);
   const [sepia, setSepia] = useState(0);
   const [blur, setBlur] = useState(0);
@@ -31,11 +32,7 @@ const PhotoEditor: React.FC<PhotoEditorProps> = ({ imageSrc, onSave, onClose }) 
     };
   }, [imageSrc]);
 
-  useEffect(() => {
-    applyFilters();
-  }, [imageObj, brightness, contrast, saturation, grayscale, sepia, blur, rotation, flipH, flipV]);
-
-  const applyFilters = () => {
+  const applyFilters = React.useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !imageObj) return;
     const ctx = canvas.getContext('2d');
@@ -61,6 +58,7 @@ const PhotoEditor: React.FC<PhotoEditorProps> = ({ imageSrc, onSave, onClose }) 
       brightness(${brightness}%) 
       contrast(${contrast}%) 
       saturate(${saturation}%) 
+      hue-rotate(${hueRotate}deg)
       grayscale(${grayscale}%) 
       sepia(${sepia}%) 
       blur(${blur}px)
@@ -75,12 +73,17 @@ const PhotoEditor: React.FC<PhotoEditorProps> = ({ imageSrc, onSave, onClose }) 
     );
 
     ctx.restore();
-  };
+  }, [imageObj, brightness, contrast, saturation, hueRotate, grayscale, sepia, blur, rotation, flipH, flipV]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [applyFilters]);
 
   const handleReset = () => {
     setBrightness(100);
     setContrast(100);
     setSaturation(100);
+    setHueRotate(0);
     setGrayscale(0);
     setSepia(0);
     setBlur(0);
@@ -180,6 +183,14 @@ const PhotoEditor: React.FC<PhotoEditorProps> = ({ imageSrc, onSave, onClose }) 
                     <span>{saturation}%</span>
                 </div>
                 <input type="range" min="0" max="200" value={saturation} onChange={(e) => setSaturation(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer" />
+            </div>
+
+            <div className="space-y-1.5">
+                <div className="flex justify-between text-[10px] font-bold text-slate-300">
+                    <span>Cân bằng màu (Hue)</span>
+                    <span>{hueRotate}°</span>
+                </div>
+                <input type="range" min="0" max="360" value={hueRotate} onChange={(e) => setHueRotate(Number(e.target.value))} className="w-full accent-indigo-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer" />
             </div>
           </div>
 

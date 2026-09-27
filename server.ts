@@ -1,175 +1,161 @@
-import express from "express";
-import { createServer as createViteServer } from "vite";
-import cookieParser from "cookie-parser";
-import jwt from "jsonwebtoken";
-import cors from "cors";
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
+import express from 'express';
+import { createServer as createViteServer } from 'vite';
+import path from 'path';
+import net from 'net';
+import http from 'http';
+import https from 'https';
+import { GeminiService } from './server/gemini.js';
 
-dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-const PORT = 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
-
-app.use(express.json());
-app.use(cookieParser());
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
-
-// API Routes
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
-// Auth Routes
-app.get("/api/auth/google/url", (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const appUrl = process.env.APP_URL;
-  
-  if (!clientId) {
-    return res.status(500).json({ 
-      error: "GOOGLE_CLIENT_ID is not configured. Please set it in your environment variables." 
-    });
-  }
-
-  if (!appUrl) {
-    return res.status(500).json({ 
-      error: "APP_URL is not configured. Please set it in your environment variables to match your application URL." 
-    });
-  }
-
-  const redirectUri = `${appUrl}/api/auth/google/callback`;
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope: "openid email profile",
-    access_type: "offline",
-    prompt: "consent"
-  });
-
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  res.json({ url: authUrl });
-});
-
-app.get("/api/auth/google/callback", async (req, res) => {
-  const { code } = req.query;
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = `${process.env.APP_URL}/api/auth/google/callback`;
-
-  if (!code || !clientId || !clientSecret) {
-    return res.status(400).send("Missing required parameters for OAuth callback");
-  }
-
+// Auto-load environment variables if .env or .env.local exists
+try {
+  process.loadEnvFile('.env.local');
+} catch {
   try {
-    // Exchange code for tokens
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code: code as string,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }),
+    process.loadEnvFile('.env');
+  } catch {}
+}
+
+// Google Flow Python backend URL
+const FLOW_BACKEND_URL = process.env.FLOW_BACKEND_URL || 'http://localhost:8000';
+
+function checkPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
     });
-
-    const tokens = await tokenResponse.json();
-    if (tokens.error) {
-      throw new Error(tokens.error_description || tokens.error);
-    }
-
-    // Get user info
-    const userResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-    const userData = await userResponse.json();
-
-    // Create JWT
-    const token = jwt.sign(
-      { id: userData.sub, email: userData.email, name: userData.name, picture: userData.picture },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    // Set cookie
-    res.cookie("auth_token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-
-    // Send success message to popup opener
-    res.send(`
-      <html>
-        <body>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
-            }
-          </script>
-          <p>Authentication successful. This window should close automatically.</p>
-        </body>
-      </html>
-    `);
-  } catch (error: any) {
-    console.error("OAuth callback error:", error);
-    res.status(500).send(`Authentication failed: ${error.message}`);
-  }
-});
-
-app.get("/api/auth/me", (req, res) => {
-  const token = req.cookies.auth_token;
-  if (!token) {
-    return res.status(401).json({ error: "Not authenticated" });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    res.json({ user: decoded });
-  } catch (error) {
-    res.status(401).json({ error: "Invalid token" });
-  }
-});
-
-app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie("auth_token", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-  });
-  res.json({ status: "ok" });
-});
-
-// Vite middleware for development
-if (process.env.NODE_ENV !== "production") {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
-  app.use(vite.middlewares);
-} else {
-  // Static serving for production
-  app.use(express.static(path.join(__dirname, "dist")));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "dist", "index.html"));
+    server.listen(port);
   });
 }
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+async function findAvailablePort(startPort: number): Promise<number> {
+  let port = startPort;
+  while (!(await checkPortAvailable(port))) {
+    port++;
+  }
+  return port;
+}
+
+/**
+ * Proxy a request to the Google Flow Python backend.
+ * Forwards method, headers (except host), and body as-is.
+ */
+function proxyToFlowBackend(
+  req: express.Request,
+  res: express.Response,
+  targetPath: string,
+): void {
+  const backendUrl = new URL(targetPath, FLOW_BACKEND_URL);
+  const isHttps = backendUrl.protocol === 'https:';
+  const transport = isHttps ? https : http;
+
+  const options: http.RequestOptions = {
+    hostname: backendUrl.hostname,
+    port: backendUrl.port || (isHttps ? 443 : 80),
+    path: backendUrl.pathname + backendUrl.search,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: backendUrl.host,
+    },
+  };
+
+  const proxyReq = transport.request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('[Flow Proxy Error]', err.message);
+    if (!res.headersSent) {
+      res.status(502).json({
+        error: 'Google Flow backend không khả dụng.',
+        detail: 'Vui lòng khởi động flow-backend: cd flow-backend && uvicorn app:app --port 8000',
+        hint: err.message,
+      });
+    }
+  });
+
+  // Pipe request body (supports multipart/form-data, JSON, etc.)
+  req.pipe(proxyReq, { end: true });
+}
+
+async function startServer() {
+  const app = express();
+  const desiredPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = await findAvailablePort(desiredPort);
+
+  if (PORT !== desiredPort) {
+    console.log(`Port ${desiredPort} is in use. Falling back to port ${PORT}.`);
+  }
+
+  app.use(express.json({ limit: '50mb' }));
+
+  // ── Gemini API endpoints ──────────────────────────────────────────────────
+  app.post('/api/gemini/:method', async (req, res) => {
+    try {
+      const { args = [], context = {} } = req.body;
+      const method = req.params.method as keyof GeminiService;
+      
+      const geminiService = new GeminiService(context.customKey, context.vertexConfig);
+      
+      if (typeof geminiService[method] === 'function') {
+        const result = await (geminiService[method] as any).apply(geminiService, args);
+        res.json({ success: true, result });
+      } else {
+        res.status(404).json({ success: false, error: 'Method not found' });
+      }
+    } catch (error: any) {
+      console.error('[GeminiService API Error]', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ── Google Flow Proxy endpoints ───────────────────────────────────────────
+  // All /api/flow/* requests are forwarded to Python FastAPI backend on port 8000
+  app.all('/api/flow/*splat', (req, res) => {
+    // Strip /api/flow prefix → map to backend /api/* or root endpoints
+    const flowPath = req.path.replace('/api/flow', '');
+    
+    // Map paths: /api/flow/session-status → /api/session-status
+    //            /api/flow/generate-image → /api/generate-image
+    //            /api/flow/health         → /health
+    //            /api/flow/job/:id        → /api/job/:id
+    let targetPath: string;
+    if (flowPath === '/health' || flowPath === '/') {
+      targetPath = flowPath;
+    } else {
+      targetPath = `/api${flowPath}`;
+    }
+
+    const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+    
+    console.log(`[Flow Proxy] ${req.method} ${req.path} → ${FLOW_BACKEND_URL}${targetPath}${queryString}`);
+    proxyToFlowBackend(req, res, `${targetPath}${queryString}`);
+  });
+
+  // ── Vite / static serving ─────────────────────────────────────────────────
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      root: process.cwd(),
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*all', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, () => {
+    console.log(`\n🚀 AI Creative Studio running on http://localhost:${PORT}`);
+    console.log(`📡 Google Flow proxy → ${FLOW_BACKEND_URL}`);
+    console.log(`   Start flow-backend: cd flow-backend && uvicorn app:app --port 8000\n`);
+  });
+}
+
+startServer();

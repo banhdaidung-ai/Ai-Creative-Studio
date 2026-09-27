@@ -1,7 +1,7 @@
-
 import React, { useState, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { geminiService } from '../services/gemini';
-import { Lightbulb, Upload, Wand2, Copy, Check, Loader2, AlertCircle, RefreshCw, Sparkles, Key } from 'lucide-react';
+import { Lightbulb, Upload, Wand2, Copy, Check, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { fileToBase64 } from '../utils/image';
 
 interface CreativePrompt {
@@ -24,7 +24,11 @@ const PromptGenerator: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
             return;
         }
@@ -37,11 +41,17 @@ const PromptGenerator: React.FC = () => {
     
     // Listen for storage changes
     const handleKeyUpdate = () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
         } else {
             if (window.aistudio?.hasSelectedApiKey) {
                 window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
+            } else {
+                setApiKeySelected(false);
             }
         }
     };
@@ -59,6 +69,8 @@ const PromptGenerator: React.FC = () => {
             await window.aistudio.openSelectKey();
             setApiKeySelected(true);
         } catch (e) { console.error(e); }
+    } else {
+        toast.info('Vui lòng kích hoạt Pro bằng tài khoản Google hoặc nhập API Key tại nút Unlock Pro bên góc trái!');
     }
   };
 
@@ -71,15 +83,19 @@ const PromptGenerator: React.FC = () => {
         );
         setImages(prev => [...prev, ...newImages].slice(0, 3));
         setError(null);
-      } catch (err) {
+      } catch {
         setError("Lỗi đọc file ảnh.");
       }
     }
   };
 
   const generatePrompts = async () => {
-    const hasManualKey = !!localStorage.getItem('gemini_api_key');
-    if (!apiKeySelected && !hasManualKey) {
+    const hasPro = !!(
+      localStorage.getItem('gemini_api_key') || 
+      localStorage.getItem('google_account_pro') === 'true' || 
+      localStorage.getItem('vertex_project_id')
+    );
+    if (!apiKeySelected && !hasPro) {
       handleSelectKey();
       return;
     }
@@ -92,8 +108,8 @@ const PromptGenerator: React.FC = () => {
     try {
       const result = await geminiService.generateCreativePrompts(idea, images);
       setPrompts(result);
-    } catch (err: any) {
-      setError(err.message || "Lỗi khi tạo gợi ý.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Lỗi khi tạo gợi ý.");
     } finally {
       setIsGenerating(false);
     }

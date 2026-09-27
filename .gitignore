@@ -22,3 +22,21 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Google Flow Backend
+flow-backend/.venv/
+flow-backend/.sessions/
+flow-backend/media_cache/
+flow-backend/temp_uploads/
+flow-backend/__pycache__/
+flow-backend/src/__pycache__/
+flow-backend/.env
+
+# AI & Editor Tools
+.claude/
+
+# OS metadata
+.DS_Store
+**/.DS_Store
+Thumbs.db
+

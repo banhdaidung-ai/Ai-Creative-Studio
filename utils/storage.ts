@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 
 interface DBState {
   id: string;
-  value: any;
+  value: unknown;
 }
 
 const openDB = (): Promise<IDBDatabase> => {
@@ -29,7 +29,7 @@ const openDB = (): Promise<IDBDatabase> => {
   });
 };
 
-export const saveState = async (key: string, value: any): Promise<void> => {
+export const saveState = async (key: string, value: unknown): Promise<void> => {
   try {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -49,7 +49,7 @@ export const saveState = async (key: string, value: any): Promise<void> => {
   }
 };
 
-export const loadState = async (key: string): Promise<any> => {
+export const loadState = async (key: string): Promise<unknown> => {
   try {
     const db = await openDB();
     return new Promise((resolve, reject) => {

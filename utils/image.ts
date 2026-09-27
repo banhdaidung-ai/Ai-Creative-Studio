@@ -1,4 +1,12 @@
 
+export const extractRatioFromPrompt = (prompt: string): string | null => {
+  const match = prompt.match(/(?:--ar|--aspect|ratio|tỷ lệ|aspect ratio)\s*[:=]?\s*(\d+[:/x]\d+)/i);
+  if (match) {
+    return match[1].replace(/[/x]/, ':');
+  }
+  return null;
+};
+
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -20,25 +28,25 @@ export const resizeImage = (file: File, maxSize: number = 2048, mimeType: string
       img.src = e.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
+        let w = img.width;
+        let h = img.height;
 
-        if (width > height) {
-          if (width > maxSize) {
-            height *= maxSize / width;
-            width = maxSize;
+        if (w > h) {
+          if (w > maxSize) {
+            h *= maxSize / w;
+            w = maxSize;
           }
         } else {
-          if (height > maxSize) {
-            width *= maxSize / height;
-            height = maxSize;
+          if (h > maxSize) {
+            w *= maxSize / h;
+            h = maxSize;
           }
         }
 
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
+        ctx?.drawImage(img, 0, 0, w, h);
         resolve(canvas.toDataURL(mimeType, quality).split(',')[1]);
       };
       img.onerror = reject;
@@ -75,14 +83,15 @@ export const padImageToRatio = (base64: string, targetRatioStr: string): Promise
         canvasHeight: img.height
       };
 
+      console.log("Padding image to ratio:", targetRatioStr, "currentRatio:", currentRatio, "targetRatio:", targetRatio);
       // If already very close, don't pad
       if (Math.abs(currentRatio - targetRatio) < 0.01) {
         resolve({ base64, info });
         return;
       }
 
-      let drawWidth = img.width;
-      let drawHeight = img.height;
+      const drawWidth = img.width;
+      const drawHeight = img.height;
       let canvasWidth = img.width;
       let canvasHeight = img.height;
 
@@ -169,8 +178,52 @@ export const unpadImage = (resultBase64: string, info: PaddingInfo): Promise<str
 };
 
 export const smoothImage = (base64: string): Promise<string> => {
-    // Dummy implementation for smoothing
-    return Promise.resolve(base64);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${base64}`;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject("Canvas context failed"); return; }
+
+      // 1. Draw original base
+      ctx.drawImage(img, 0, 0);
+      
+      // 2. Create a "Surface Blur" effect by layering
+      // We use a temporary canvas to generate the blurred layer
+      const blurCanvas = document.createElement('canvas');
+      blurCanvas.width = img.width;
+      blurCanvas.height = img.height;
+      const blurCtx = blurCanvas.getContext('2d');
+      if (blurCtx) {
+        blurCtx.filter = 'blur(2px) saturate(1.05)';
+        blurCtx.drawImage(img, 0, 0);
+        
+        // Blend the blurred version back at 40% opacity
+        // This smooths out skin tones/noise while keeping the original structure underneath
+        ctx.globalAlpha = 0.4;
+        ctx.drawImage(blurCanvas, 0, 0);
+        ctx.globalAlpha = 1.0;
+      }
+
+      // 3. Bring back edges and details using a sharpen-like contrast boost
+      // This helps prevent the "blurry" look the user complained about
+      ctx.filter = 'contrast(1.08) brightness(1.02) saturate(1.01)';
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.globalAlpha = 0.15; // Subtle overlay of the original to pop details
+      ctx.drawImage(img, 0, 0);
+      
+      // Reset state
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1.0;
+      ctx.filter = 'none';
+
+      resolve(canvas.toDataURL('image/png').split(',')[1]);
+    };
+    img.onerror = reject;
+  });
 };
 
 export const applyMask = (originalBase64: string, maskBase64: string): Promise<string> => {
@@ -194,22 +247,32 @@ export const applyMask = (originalBase64: string, maskBase64: string): Promise<s
         // Get image data
         const originalData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         
-        // Draw mask on a temporary canvas to get its data
+        // Create a high-quality mask canvas with slight smoothing
         const maskCanvas = document.createElement('canvas');
         maskCanvas.width = originalImg.width;
         maskCanvas.height = originalImg.height;
         const maskCtx = maskCanvas.getContext('2d');
         if (!maskCtx) { reject("Mask canvas context failed"); return; }
+        
+        // Draw mask with slight blur to anti-alias edges
+        maskCtx.filter = 'blur(0.5px)'; 
         maskCtx.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
         const maskData = maskCtx.getImageData(0, 0, canvas.width, canvas.height);
         
-        // Apply mask to alpha channel
+        // Apply mask to alpha channel with edge enhancement
         for (let i = 0; i < originalData.data.length; i += 4) {
-          // Use the brightness of the mask as the alpha value
-          // Mask is B&W, so R=G=B. Just use R.
-          // We also handle potential inversion or gray values
           const maskValue = maskData.data[i]; 
-          originalData.data[i + 3] = maskValue;
+          
+          // Apply a slight contrast curve to the mask to sharpen edges while keeping anti-aliasing
+          // Values near 0 become 0, values near 255 become 255, middle values stay smooth
+          let alpha = maskValue;
+          if (alpha > 0 && alpha < 255) {
+            // Simple contrast boost for alpha
+            alpha = (alpha - 128) * 1.1 + 128;
+            alpha = Math.max(0, Math.min(255, alpha));
+          }
+          
+          originalData.data[i + 3] = alpha;
         }
         
         ctx.putImageData(originalData, 0, 0);

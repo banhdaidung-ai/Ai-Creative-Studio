@@ -1,14 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS } from '../services/gemini';
-import { resizeImage, padImageToRatio, unpadImage } from '../utils/image';
-import PhotoEditor from './PhotoEditor';
 import { ModelSelector } from './ModelSelector';
+import AspectRatioSelector from './AspectRatioSelector';
+import { resizeImage, extractRatioFromPrompt } from '../utils/image';
+import PhotoEditor from './PhotoEditor';
+import { useProject } from '../src/context/ProjectContext';
 import { 
-  Camera, Upload, RefreshCw, Download, 
+  Camera, Upload, RefreshCw, Download, DownloadCloud,
   Lightbulb, Loader2, Maximize2, X, Layers, Zap, Crown,
-  Square, Image as ImageIcon, CheckSquare, Check, DownloadCloud,
-  Key, RotateCcw, Eye, Scan, LayoutGrid, Film, ZoomIn, ZoomOut, User, Shirt, Palette,
-  Settings2, ChevronUp, ChevronDown, Sliders, Sparkles, Play
+  Square, Image as ImageIcon, CheckSquare, Check,
+  RotateCcw, Eye, Scan, LayoutGrid, Film, ZoomIn, ZoomOut, User, Shirt, Palette,
+  Settings2, ChevronUp, ChevronDown, Sliders, Sparkles, Play, Box
 } from 'lucide-react';
 
 const STYLE_PRESETS = [
@@ -22,9 +25,8 @@ const STYLE_PRESETS = [
   { id: 'monochrome', label: 'B&W Art', prompt: 'High contrast black and white photography, artistic shadows, dramatic mood.' },
 ];
 
-const RATIOS = ["Auto", "1:1", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9"];
-
 const MultiAngleStudio: React.FC = () => {
+  const { addToHistory, workspaceAsset, addToWorkspace } = useProject();
   const [modelImage, setModelImage] = useState<string | null>(null);
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [backImage, setBackImage] = useState<string | null>(null);
@@ -54,11 +56,9 @@ const MultiAngleStudio: React.FC = () => {
     return initialPrompts;
   });
 
-  const [modelTier, setModelTier] = useState<'standard' | 'pro'>('pro');
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image-preview');
+  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
   const [imageSize, setImageSize] = useState('1K');
-  const [aspectRatio, setAspectRatio] = useState('Auto');
-  const [detectedRatio, setDetectedRatio] = useState('3:4');
+  const [aspectRatio, setAspectRatio] = useState('3:4');
   
   // Zoom & Pan State for Preview
   const [zoom, setZoom] = useState(1);
@@ -66,6 +66,20 @@ const MultiAngleStudio: React.FC = () => {
   const [isDraggingPreview, setIsDraggingPreview] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   
+  const getClosestRatio = (width: number, height: number): string => {
+    const target = width / height;
+    const ratios = [
+      { name: "1:1", val: 1 },
+      { name: "3:4", val: 3 / 4 },
+      { name: "4:3", val: 4 / 3 },
+      { name: "9:16", val: 9 / 16 },
+      { name: "16:9", val: 16 / 9 }
+    ];
+    return ratios.reduce((prev, curr) => 
+      Math.abs(curr.val - target) < Math.abs(prev.val - target) ? curr : prev
+    ).name;
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const faceInputRef = useRef<HTMLInputElement>(null);
   const backInputRef = useRef<HTMLInputElement>(null);
@@ -73,7 +87,11 @@ const MultiAngleStudio: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
             return;
         }
@@ -83,15 +101,18 @@ const MultiAngleStudio: React.FC = () => {
         }
     };
     checkKey();
-    
-    // Listen for storage changes
+
     const handleKeyUpdate = () => {
-        if (localStorage.getItem('gemini_api_key')) {
+        if (
+            localStorage.getItem('gemini_api_key') || 
+            localStorage.getItem('google_account_pro') === 'true' || 
+            localStorage.getItem('vertex_project_id')
+        ) {
             setApiKeySelected(true);
+        } else if (window.aistudio?.hasSelectedApiKey) {
+            window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
         } else {
-            if (window.aistudio?.hasSelectedApiKey) {
-                window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
-            }
+            setApiKeySelected(false);
         }
     };
     window.addEventListener('storage', handleKeyUpdate);
@@ -118,6 +139,36 @@ const MultiAngleStudio: React.FC = () => {
         setPan({ x: 0, y: 0 });
     }
   }, [previewImage]);
+
+  const processFile = React.useCallback(async (file: File, type: 'model' | 'face' | 'back') => {
+    if (!file.type.startsWith('image/')) return;
+    
+    if (type === 'model') {
+        const objectUrl = URL.createObjectURL(file);
+        const img = new Image();
+        img.src = objectUrl;
+        img.onload = () => {
+          const closest = getClosestRatio(img.width, img.height);
+          setAspectRatio(closest);
+          URL.revokeObjectURL(objectUrl);
+        };
+    }
+    
+    const base64 = await resizeImage(file);
+    if (type === 'model') {
+        setModelImage(base64);
+        setResults({});
+        setProcessingAngles(new Set());
+        setSelectedAngles(new Set());
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    } else if (type === 'face') {
+        setFaceImage(base64);
+        if (faceInputRef.current) faceInputRef.current.value = '';
+    } else if (type === 'back') {
+        setBackImage(base64);
+        if (backInputRef.current) backInputRef.current.value = '';
+    }
+  }, [aspectRatio]);
 
   // Handle Paste Event
   useEffect(() => {
@@ -150,21 +201,7 @@ const MultiAngleStudio: React.FC = () => {
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [modelImage, faceImage, backImage]);
-
-  const getClosestRatio = (width: number, height: number): string => {
-    const target = width / height;
-    const ratios = [
-      { name: "1:1", val: 1 },
-      { name: "3:4", val: 3 / 4 },
-      { name: "4:3", val: 4 / 3 },
-      { name: "9:16", val: 9 / 16 },
-      { name: "16:9", val: 16 / 9 }
-    ];
-    return ratios.reduce((prev, curr) => 
-      Math.abs(curr.val - target) < Math.abs(prev.val - target) ? curr : prev
-    ).name;
-  };
+  }, [modelImage, faceImage, backImage, processFile]);
 
   const handleSelectKey = async () => {
     if (window.aistudio?.openSelectKey) {
@@ -172,39 +209,8 @@ const MultiAngleStudio: React.FC = () => {
             await window.aistudio.openSelectKey();
             setApiKeySelected(true);
         } catch (e) { console.error(e); }
-    }
-  };
-
-  const processFile = async (file: File, type: 'model' | 'face' | 'back') => {
-    if (!file.type.startsWith('image/')) return;
-    
-    if (type === 'model') {
-        const objectUrl = URL.createObjectURL(file);
-        const img = new Image();
-        img.src = objectUrl;
-        img.onload = () => {
-          const closest = getClosestRatio(img.width, img.height);
-          setDetectedRatio(closest);
-          if (aspectRatio === 'Auto') {
-            // Keep it as Auto, but detectedRatio is updated
-          }
-          URL.revokeObjectURL(objectUrl);
-        };
-    }
-    
-    const base64 = await resizeImage(file);
-    if (type === 'model') {
-        setModelImage(base64);
-        setResults({});
-        setProcessingAngles(new Set());
-        setSelectedAngles(new Set());
-        if (fileInputRef.current) fileInputRef.current.value = '';
-    } else if (type === 'face') {
-        setFaceImage(base64);
-        if (faceInputRef.current) faceInputRef.current.value = '';
-    } else if (type === 'back') {
-        setBackImage(base64);
-        if (backInputRef.current) backInputRef.current.value = '';
+    } else {
+        toast.info('Vui lòng kích hoạt Pro bằng tài khoản Google hoặc nhập API Key tại nút Unlock Pro bên góc trái!');
     }
   };
 
@@ -243,8 +249,7 @@ const MultiAngleStudio: React.FC = () => {
 
   const generateAngle = async (angleId: string) => {
     if (!modelImage) return;
-    const hasManualKey = !!localStorage.getItem('gemini_api_key');
-    if (modelTier === 'pro' && !apiKeySelected && !hasManualKey) {
+    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
         handleSelectKey();
         return;
     }
@@ -252,19 +257,13 @@ const MultiAngleStudio: React.FC = () => {
 
     setProcessingAngles(prev => new Set(prev).add(angleId));
     try {
-        const finalRatio = aspectRatio === 'Auto' ? detectedRatio : aspectRatio;
-        
-        // Pad image to match the target ratio exactly before sending to AI
-        const { base64: processedModelImage, info: paddingInfo } = await padImageToRatio(modelImage, finalRatio);
-
-        let result = await geminiService.generateSingleAngle(
-            processedModelImage, 
+        const result = await geminiService.generateSingleAngle(
+            modelImage, 
             angleId, 
             [], 
             { 
-                aspectRatio: finalRatio, 
+                aspectRatio: aspectRatio, 
                 imageSize: imageSize,
-                modelTier: modelTier,
                 modelId: selectedModelId,
                 customPrompt: prompts[angleId],
                 faceImageBase64: faceImage || undefined,
@@ -272,17 +271,21 @@ const MultiAngleStudio: React.FC = () => {
                 stylePrompt: STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt
             }
         );
-
-        if (result && paddingInfo) {
-            // Unpad (crop) the result back to original dimensions
-            result = await unpadImage(result, paddingInfo);
-        }
-
         if (result) {
             setResults(prev => ({ ...prev, [angleId]: result }));
             setSelectedAngles(prev => new Set(prev).add(angleId));
+            
+            // Add to global history
+            addToHistory({
+              url: `data:image/png;base64,${result}`,
+              prompt: prompts[angleId],
+              mode: 'MULTI_ANGLE'
+            });
         }
-    } catch (e) { console.error(e); } finally {
+    } catch (err: any) { 
+        console.error(err); 
+        toast.error('Lỗi khi tạo góc ảnh này', { description: err.message || 'Vui lòng kiểm tra lại cấu hình hoặc API Key.' });
+    } finally {
         setProcessingAngles(prev => {
             const next = new Set(prev);
             next.delete(angleId);
@@ -293,8 +296,8 @@ const MultiAngleStudio: React.FC = () => {
 
   const generateAll = () => {
     if (!modelImage) return;
-    const hasManualKey = !!localStorage.getItem('gemini_api_key');
-    if (modelTier === 'pro' && !apiKeySelected && !hasManualKey) { handleSelectKey(); return; }
+    const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
+    if (selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
     if (window.innerWidth < 1024) setShowConfig(false);
     ANGLE_CONFIGS.forEach(angle => generateAngle(angle.id));
   };
@@ -335,31 +338,27 @@ const MultiAngleStudio: React.FC = () => {
     if (previewImage) {
         e.stopPropagation();
         const scaleAmount = -e.deltaY * 0.001;
-        const newZoom = Math.min(Math.max(1, zoom + scaleAmount), 5);
-        setZoom(newZoom);
-        if (newZoom === 1) setPan({ x: 0, y: 0 });
+        const nextZoom = Math.min(Math.max(1, zoom + scaleAmount), 5);
+        setZoom(nextZoom);
+        if (nextZoom === 1) setPan({ x: 0, y: 0 });
     }
   };
 
-  const startDrag = (e: React.MouseEvent | React.TouchEvent) => {
+  const startDrag = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
     if (zoom > 1) {
         e.preventDefault();
         setIsDraggingPreview(true);
-        setDragStart({ x: clientX - pan.x, y: clientY - pan.y });
+        setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
     } else {
         setZoom(2); 
     }
   };
 
-  const onDrag = (e: React.MouseEvent | React.TouchEvent) => {
+  const onDrag = (e: React.MouseEvent) => {
     if (isDraggingPreview && zoom > 1) {
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
         e.preventDefault();
-        setPan({ x: clientX - dragStart.x, y: clientY - dragStart.y });
+        setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     }
   };
 
@@ -376,7 +375,7 @@ const MultiAngleStudio: React.FC = () => {
   };
 
   return (
-    <div ref={containerRef} className="h-full flex flex-col p-2 md:p-4 overflow-hidden outline-none" tabIndex={0}>
+    <div ref={containerRef} className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden outline-none" tabIndex={0}>
       {/* Header */}
       <div className="mb-2 md:mb-4 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-3">
@@ -404,19 +403,12 @@ const MultiAngleStudio: React.FC = () => {
 
             {showConfig && (
                 <div className="flex flex-col gap-3 md:gap-4 overflow-y-auto no-scrollbar flex-1 pb-16">
-                    <ModelSelector 
-                        selectedModelId={selectedModelId}
-                        onModelSelect={(id) => {
-                            setSelectedModelId(id);
-                            const model = MODEL_OPTIONS.find(m => m.id === id);
-                            if (model) setModelTier(model.tier as any);
-                            if (id.includes('pro') && !apiKeySelected) handleSelectKey();
-                        }}
-                    />
+                    {/* 1. Quality */}
+                    <ModelSelector selectedModelId={selectedModelId} onModelSelect={setSelectedModelId} />
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className={`grid ${MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
                         {/* 2. Resolution (Pro Only) */}
-                        {modelTier === 'pro' && (
+                        {MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && (
                             <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
                                 <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">Độ phân giải</label>
                                 <div className="relative group">
@@ -433,18 +425,34 @@ const MultiAngleStudio: React.FC = () => {
                         )}
 
                         {/* 3. Aspect Ratio */}
-                        <div className={`space-y-1.5 ${modelTier !== 'pro' ? 'col-span-2' : ''}`}>
-                            <label className="text-[9px] md:text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">Tỷ lệ khung hình</label>
-                            <div className="relative group">
-                                <select 
-                                    value={aspectRatio}
-                                    onChange={(e) => setAspectRatio(e.target.value)}
-                                    className="w-full appearance-none bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2.5 pl-3 pr-8 text-[10px] font-black text-blue-600 dark:text-blue-400 shadow-sm outline-none focus:ring-1 focus:ring-blue-500/50 transition-all cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700"
-                                >
-                                    {RATIOS.map(ratio => <option key={ratio} value={ratio} className="bg-slate-800 text-white">{ratio}</option>)}
-                                </select>
-                                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-blue-500/70 pointer-events-none group-hover:translate-y-0.5 transition-transform" />
-                            </div>
+                        <div className={`space-y-1.5 ${MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier !== 'pro' ? 'col-span-2' : ''}`}>
+                            <AspectRatioSelector 
+                                value={aspectRatio}
+                                onChange={setAspectRatio}
+                                hasImage={!!modelImage}
+                                onAutoDetect={() => {
+                                    if (modelImage) {
+                                        const img = new Image();
+                                        img.onload = () => {
+                                            const w = img.width;
+                                            const h = img.height;
+                                            const ratios = ["1:1", "3:4", "4:3", "2:3", "3:2", "4:5", "5:4", "9:16", "16:9"];
+                                            let closestRatio = "1:1";
+                                            let minDiff = Infinity;
+                                            ratios.forEach(r => {
+                                                const [rw, rh] = r.split(':').map(Number);
+                                                const diff = Math.abs((w/h) - (rw/rh));
+                                                if (diff < minDiff) {
+                                                    minDiff = diff;
+                                                    closestRatio = r;
+                                                }
+                                            });
+                                            setAspectRatio(closestRatio);
+                                        };
+                                        img.src = `data:image/png;base64,${modelImage}`;
+                                    }
+                                }}
+                            />
                         </div>
                     </div>
 
@@ -468,7 +476,17 @@ const MultiAngleStudio: React.FC = () => {
                     <div className="space-y-3 pt-2 border-t border-white/10">
                         {/* Main Model */}
                         <div className="space-y-1.5">
-                            <label className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">1. Ảnh Gốc (Full Body)</label>
+                            <div className="flex justify-between items-center px-1">
+                                <label className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-2">1. Ảnh Gốc (Full Body)</label>
+                                {workspaceAsset && (
+                                    <button 
+                                        onClick={() => setModelImage(workspaceAsset.url.split(',')[1])}
+                                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wide bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 transition-all"
+                                    >
+                                        <Box size={10} /> Load Workspace
+                                    </button>
+                                )}
+                            </div>
                             <div 
                                 onClick={() => fileInputRef.current?.click()} 
                                 onDragOver={(e) => handleDragOver(e, 'model')}
@@ -587,6 +605,20 @@ const MultiAngleStudio: React.FC = () => {
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-1.5 md:gap-2">
                                                     <button onClick={() => setPreviewImage(results[config.id])} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Phóng to"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>
+                                                    <button 
+                                                        onClick={(e) => { 
+                                                            e.stopPropagation(); 
+                                                            addToWorkspace({
+                                                                url: `data:image/png;base64,${results[config.id]}`,
+                                                                prompt: prompts[config.id],
+                                                                mode: 'MULTI_ANGLE'
+                                                            });
+                                                        }} 
+                                                        className="p-1.5 bg-amber-500/80 backdrop-blur-md rounded-xl text-white hover:bg-amber-500 border border-white/10" 
+                                                        title="Gửi vào Workspace"
+                                                    >
+                                                        <Box className="w-3 h-3 md:w-4 md:h-4" />
+                                                    </button>
                                                     <button onClick={(e) => { e.stopPropagation(); setEditingAngleId(config.id); }} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Sửa ảnh"><Sliders className="w-3 h-3 md:w-4 md:h-4" /></button>
                                                     <button onClick={() => generateAngle(config.id)} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Tạo lại"><RefreshCw className="w-3 h-3 md:w-4 md:h-4" /></button>
                                                     <button 
@@ -651,9 +683,9 @@ const MultiAngleStudio: React.FC = () => {
 
       {/* Fullscreen Preview */}
       {previewImage && (
-        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)]" onClick={() => setPreviewImage(null)}>
-            <button className="absolute top-4 right-4 z-[110] text-white/60 hover:text-white bg-white/10 p-2 rounded-2xl active:scale-90 transition-transform"><X className="w-6 h-6" /></button>
-            <div className="relative flex items-center justify-center w-full h-full" onClick={(e) => e.stopPropagation()} onWheel={handleWheel} onMouseDown={startDrag} onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag} onTouchStart={startDrag} onTouchMove={onDrag} onTouchEnd={endDrag}>
+        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}>
+            <button className="absolute top-4 right-4 z-[110] text-white/60 hover:text-white bg-white/10 p-2 rounded-2xl"><X className="w-6 h-6" /></button>
+            <div className="relative flex items-center justify-center w-full h-full" onClick={(e) => e.stopPropagation()} onWheel={handleWheel} onMouseDown={startDrag} onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag}>
                 <img src={`data:image/png;base64,${previewImage}`} className="max-w-full max-h-[85vh] object-contain rounded-[1rem] shadow-2xl transition-transform duration-100 ease-out select-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? (isDraggingPreview ? 'grabbing' : 'grab') : 'zoom-in' }} draggable={false} />
             </div>
         </div>

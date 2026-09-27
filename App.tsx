@@ -1,17 +1,22 @@
 
 import React, { useState, useEffect } from 'react';
+import Layout from './components/Layout';
+import ImageEditor from './components/ImageEditor';
+import MultiAngleStudio from './components/MultiAngleStudio';
+import BatchFashionStudio from './components/BatchFashionStudio';
+import BackgroundRemover from './components/BackgroundRemover';
+import VideoGenerator from './components/VideoGenerator';
+import PromptGenerator from './components/PromptGenerator';
+import ManualEditor from './components/ManualEditor';
+import LandingPage from './components/LandingPage';
+import HistoryGallery from './components/HistoryGallery';
+import UserGuide from './components/UserGuide';
+import PromptLibrary from './components/PromptLibrary';
+import WorkflowStudio from './components/WorkflowStudio';
+import LoginGate from './components/LoginGate';
 import { AppMode } from './types';
-
-// Lazy load studio components
-const Layout = React.lazy(() => import('./components/Layout'));
-const ImageEditor = React.lazy(() => import('./components/ImageEditor'));
-const MultiAngleStudio = React.lazy(() => import('./components/MultiAngleStudio'));
-const BatchFashionStudio = React.lazy(() => import('./components/BatchFashionStudio'));
-const BackgroundRemover = React.lazy(() => import('./components/BackgroundRemover'));
-const VideoGenerator = React.lazy(() => import('./components/VideoGenerator'));
-const PromptGenerator = React.lazy(() => import('./components/PromptGenerator'));
-const ManualEditor = React.lazy(() => import('./components/ManualEditor'));
-const LandingPage = React.lazy(() => import('./components/LandingPage'));
+import { ProjectProvider } from './src/context/ProjectContext';
+import { Toaster } from 'sonner';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.IMAGE_EDITOR);
@@ -29,27 +34,38 @@ const App: React.FC = () => {
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
   if (showLanding) {
-    return <LandingPage onStart={() => setShowLanding(false)} />;
+    return (
+      <LoginGate>
+        <LandingPage onStart={() => setShowLanding(false)} />
+      </LoginGate>
+    );
   }
 
   return (
-    <div className="animate-in fade-in duration-1000">
-      <React.Suspense fallback={
-        <div className="h-screen w-screen flex items-center justify-center bg-[#050505]">
-          <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+    <LoginGate>
+      <ProjectProvider>
+        <div className="animate-in fade-in duration-1000 flex h-screen">
+          <Layout currentMode={mode} onSwitchMode={setMode} isDarkMode={isDarkMode} toggleTheme={toggleTheme}>
+            <div className="flex flex-1 overflow-hidden">
+              <div className="flex-1 overflow-auto">
+                {mode === AppMode.IMAGE_EDITOR && <ImageEditor />}
+                {mode === AppMode.MULTI_ANGLE && <MultiAngleStudio />}
+                {mode === AppMode.BATCH_FASHION && <BatchFashionStudio />}
+                {mode === AppMode.BACKGROUND_REMOVER && <BackgroundRemover />}
+                {mode === AppMode.VIDEO_GENERATOR && <VideoGenerator />}
+                {mode === AppMode.PROMPT_GENERATOR && <PromptGenerator />}
+                {mode === AppMode.MANUAL_EDITOR && <ManualEditor />}
+                {mode === AppMode.HISTORY && <HistoryGallery />}
+                {mode === AppMode.GUIDE && <UserGuide />}
+                {mode === AppMode.PROMPT_LIBRARY && <PromptLibrary onSwitchMode={setMode} />}
+                {mode === AppMode.WORKFLOW && <WorkflowStudio />}
+              </div>
+            </div>
+          </Layout>
+          <Toaster position="top-right" richColors closeButton />
         </div>
-      }>
-        <Layout currentMode={mode} onSwitchMode={setMode} isDarkMode={isDarkMode} toggleTheme={toggleTheme}>
-          {mode === AppMode.IMAGE_EDITOR && <ImageEditor />}
-          {mode === AppMode.MULTI_ANGLE && <MultiAngleStudio />}
-          {mode === AppMode.BATCH_FASHION && <BatchFashionStudio />}
-          {mode === AppMode.BACKGROUND_REMOVER && <BackgroundRemover />}
-          {mode === AppMode.VIDEO_GENERATOR && <VideoGenerator />}
-          {mode === AppMode.PROMPT_GENERATOR && <PromptGenerator />}
-          {mode === AppMode.MANUAL_EDITOR && <ManualEditor />}
-        </Layout>
-      </React.Suspense>
-    </div>
+      </ProjectProvider>
+    </LoginGate>
   );
 };
 

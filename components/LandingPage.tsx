@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Sparkles, ArrowRight, Bell } from 'lucide-react';
 import { ChangelogModal, APP_UPDATES } from './ChangelogModal';
+import UserAvatar from './UserAvatar';
 
 interface LandingPageProps {
   onStart: () => void;
@@ -18,16 +19,25 @@ const PALETTES = [
 const LAST_SEEN_UPDATE_KEY = 'yody_last_seen_update_id';
 
 const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
-  const [palette, setPalette] = useState(PALETTES[0]);
+  const [palette] = useState(() => {
+    const randomIdx = Math.floor(Math.random() * PALETTES.length);
+    return PALETTES[randomIdx];
+  });
   const [showChangelog, setShowChangelog] = useState(false);
   const [hasNewUpdate, setHasNewUpdate] = useState(false);
 
   useEffect(() => {
-    // Chọn ngẫu nhiên một bảng màu mỗi lần truy cập
-    const randomIdx = Math.floor(Math.random() * PALETTES.length);
-    setPalette(PALETTES[randomIdx]);
+    // Check for updates
+    const lastSeenId = localStorage.getItem(LAST_SEEN_UPDATE_KEY);
+    const latestUpdateId = APP_UPDATES[0]?.id;
 
-
+    if (latestUpdateId && lastSeenId !== latestUpdateId) {
+      // Có update mới -> Tự động hiện popup (defer to avoid synchronous setState warning)
+      setTimeout(() => {
+        setShowChangelog(true);
+        setHasNewUpdate(true);
+      }, 0);
+    }
   }, []);
 
   const handleCloseChangelog = () => {
@@ -52,8 +62,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
         <div className={`absolute top-[20%] right-[10%] w-[30%] h-[30%] ${palette.blobs[2]} rounded-full blur-[100px] opacity-20 animate-blob animation-delay-4000`}></div>
       </div>
 
-      {/* Header News Button (Top Right) */}
-      <div className="absolute top-6 right-6 z-20 animate-in fade-in slide-in-from-top-4 duration-1000 delay-300">
+      {/* Header News Button & User Profile (Top Right) */}
+      <div className="absolute top-6 right-6 z-20 flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-1000 delay-300">
+        <UserAvatar variant="compact" />
         <button 
           onClick={() => setShowChangelog(true)}
           className="relative group flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full backdrop-blur-md transition-all active:scale-95"

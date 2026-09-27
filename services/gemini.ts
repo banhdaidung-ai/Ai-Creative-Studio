@@ -25,6 +25,8 @@ export const MODEL_OPTIONS = [
   { id: 'imagen-4.0-generate-001', name: 'Imagen 4 (API)', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
 ];
 
+import { GeminiService as CoreGeminiService } from '../server/gemini';
+
 export class GeminiService {
   private async rpc(method: string, args: any[]) {
       const customKey = localStorage.getItem('gemini_api_key') || undefined;
@@ -34,14 +36,33 @@ export class GeminiService {
           accessToken: localStorage.getItem('vertex_access_token') || undefined
       };
       
-      const res = await fetch(`/api/gemini/${method}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ args, context: { customKey, vertexConfig } })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      return data.result;
+      try {
+        const res = await fetch(`/api/gemini/${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ args, context: { customKey, vertexConfig } })
+        });
+        
+        if (!res.ok) {
+          throw new Error(`Server returned status ${res.status}`);
+        }
+        
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error('Non-JSON response from server');
+        }
+        
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        return data.result;
+      } catch (err: any) {
+        console.warn(`[GeminiService] Server RPC unavailable (${err.message}). Falling back to direct client execution.`);
+        const localService = new CoreGeminiService(customKey, vertexConfig);
+        if (typeof (localService as any)[method] === 'function') {
+          return await (localService as any)[method](...args);
+        }
+        throw err;
+      }
   }
 
   async validateVertexConfig(projectId: string, location: string, accessToken: string): Promise<boolean> {

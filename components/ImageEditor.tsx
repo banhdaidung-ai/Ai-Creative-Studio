@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { geminiService } from '../services/gemini';
 import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
-import { resizeImage, smoothImage, extractRatioFromPrompt } from '../utils/image';
+import { resizeImage, smoothImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
 import PhotoEditor from './PhotoEditor';
 import { useProject } from '../src/context/ProjectContext';
@@ -50,7 +50,9 @@ const ImageEditor: React.FC = () => {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isEditing, setIsEditing] = useState(false);
   const [timer, setTimer] = useState(0);
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image');
+  const [selectedModelId, setSelectedModelId] = useState<string>(() => {
+    return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+  });
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const usingFlow = isFlowModel(selectedModelId);
 
@@ -98,14 +100,26 @@ const ImageEditor: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      if (
-        localStorage.getItem('gemini_api_key') || 
-        localStorage.getItem('google_account_pro') === 'true' || 
-        localStorage.getItem('vertex_project_id')
-      ) {
+      const flowAvailable = await isFlowBackendAvailable().catch(() => false);
+      const hasLocalKey = localStorage.getItem('gemini_api_key') || 
+                          localStorage.getItem('google_account_pro') === 'true' || 
+                          localStorage.getItem('vertex_project_id');
+
+      if (hasLocalKey) {
         setApiKeySelected(true);
         return;
       }
+
+      if (flowAvailable) {
+        setApiKeySelected(true);
+        const currentModel = localStorage.getItem('last_selected_model');
+        if (!currentModel || !isFlowModel(currentModel)) {
+          setSelectedModelId(FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
+          localStorage.setItem('last_selected_model', FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
+        }
+        return;
+      }
+
       if (window.aistudio?.hasSelectedApiKey) {
         const has = await window.aistudio.hasSelectedApiKey();
         setApiKeySelected(has);
@@ -133,6 +147,16 @@ const ImageEditor: React.FC = () => {
       window.removeEventListener('gemini_api_key_updated', handleKeyUpdate);
     };
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && previewImage) {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImage]);
 
   useEffect(() => {
     let interval: any;
@@ -313,11 +337,34 @@ const ImageEditor: React.FC = () => {
     }
   };
 
-  const handleGenerate = async () => {
-    const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
+  const handleModelSelect = (modelId: string) => {
+    setSelectedModelId(modelId);
+    localStorage.setItem('last_selected_model', modelId);
+  };
 
-    // Gemini API key check (only for non-Flow models)
-    if (!usingFlow && selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
+  const handleGenerate = async () => {
+    let effectiveModelId = selectedModelId;
+    let effectiveUsingFlow = isFlowModel(effectiveModelId);
+
+    // Auto-fallback: Nếu đang chọn mô hình API mà chưa có Gemini key nhưng Flow backend đang hoạt động,
+    // tự động chuyển sang mô hình Google Flow Nano Banana Pro
+    if (!effectiveUsingFlow && !apiKeySelected) {
+      const flowActive = await isFlowBackendAvailable().catch(() => false);
+      if (flowActive) {
+        effectiveModelId = FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+        effectiveUsingFlow = true;
+        setSelectedModelId(effectiveModelId);
+        localStorage.setItem('last_selected_model', effectiveModelId);
+        toast.info('⚡ Tự động chọn mô hình Google Flow (Nano Banana Pro) sẵn có trên máy.');
+      } else {
+        const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
+        if (selectedModel?.tier === 'pro') {
+          handleSelectKey();
+          return;
+        }
+      }
+    }
+
     if (!modelImage && !prompt && refImages.length === 0) { 
       setError("Vui lòng tải ảnh mẫu, ảnh tham chiếu hoặc nhập mô tả ý tưởng."); 
       return; 
@@ -331,7 +378,7 @@ const ImageEditor: React.FC = () => {
 
     try {
       // ── Google Flow path (với tính năng tự động chuyển tiếp thông minh cho Web) ─────────────
-      if (usingFlow) {
+      if (effectiveUsingFlow) {
         let isLocalFlowActive = false;
         try {
           isLocalFlowActive = await isFlowBackendAvailable();
@@ -341,14 +388,25 @@ const ImageEditor: React.FC = () => {
 
         if (isLocalFlowActive) {
           const activeRef = modelImage || (refImages.length > 0 ? refImages[0] : undefined);
+          let refMime = 'image/jpeg';
+          if (activeRef) {
+            if (activeRef.startsWith('data:image/png') || activeRef.startsWith('iVBORw0KGgo')) {
+              refMime = 'image/png';
+            } else if (activeRef.startsWith('data:image/webp') || activeRef.startsWith('UklGR')) {
+              refMime = 'image/webp';
+            }
+          }
+
+          const flowPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao dựa trên ảnh tham chiếu, ánh sáng studio nghệ thuật';
+
           const flowResult = await generateImageViaFlow(
             {
-              prompt: prompt || 'Generate a high quality photoshoot image based on the reference',
+              prompt: flowPrompt,
               aspectRatio,
               numImages: 1,
-              model: selectedModelId,
+              model: effectiveModelId,
               referenceImageBase64: activeRef,
-              referenceImageMime: activeRef?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+              referenceImageMime: refMime,
             },
             (progress, message) => {
               setLoadingMessage(message || `Google Flow (${progress}%)`);
@@ -357,13 +415,10 @@ const ImageEditor: React.FC = () => {
 
           if (flowResult) {
             playSuccessSound();
-            const base64Part = flowResult.startsWith('data:')
-              ? flowResult.split(',')[1]
-              : flowResult;
-            setResultImage(base64Part);
+            setResultImage(flowResult);
             addToHistory({
               url: flowResult,
-              prompt,
+              prompt: flowPrompt,
               mode: 'IMAGE_EDITOR'
             });
             return;
@@ -373,8 +428,8 @@ const ImageEditor: React.FC = () => {
         } else {
           // Flow backend không chạy ở client (người dùng web thông thường)
           // Tự động chuyển tiếp sang mô hình Cloud AI tương ứng để tạo ảnh trực tiếp!
-          const targetCloudModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
-          console.log(`[ImageEditor] Flow backend offline, auto-routing ${selectedModelId} → ${targetCloudModel}`);
+          const targetCloudModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-3.1-flash-image';
+          console.log(`[ImageEditor] Flow backend offline, auto-routing ${effectiveModelId} → ${targetCloudModel}`);
           toast.info('🌐 Đang tạo ảnh qua Cloud AI Studio...');
           setLoadingMessage("Đang tạo ảnh qua Cloud AI Studio...");
 
@@ -388,7 +443,7 @@ const ImageEditor: React.FC = () => {
           };
 
           const finalRefs = [...refImages];
-          let finalPrompt = prompt || 'Generate a high quality image';
+          let finalPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao';
           if (maskImage) {
               finalRefs.push(maskImage);
               finalPrompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
@@ -402,8 +457,8 @@ const ImageEditor: React.FC = () => {
             playSuccessSound();
             setResultImage(resultBase64);
             addToHistory({
-              url: `data:image/png;base64,${resultBase64}`,
-              prompt,
+              url: formatImageSrc(resultBase64),
+              prompt: finalPrompt,
               mode: 'IMAGE_EDITOR'
             });
             return;
@@ -416,7 +471,7 @@ const ImageEditor: React.FC = () => {
       // ── Gemini API path ───────────────────────────────────────────────────
       let resultBase64;
       const genConfig = { 
-        modelId: selectedModelId, 
+        modelId: effectiveModelId, 
         aspectRatio, 
         imageSize,
         negativePrompt,
@@ -425,7 +480,7 @@ const ImageEditor: React.FC = () => {
       };
 
       const finalRefs = [...refImages];
-      let finalPrompt = prompt;
+      let finalPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao';
       if (maskImage) {
           finalRefs.push(maskImage);
           finalPrompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
@@ -438,13 +493,14 @@ const ImageEditor: React.FC = () => {
         playSuccessSound();
         setResultImage(resultBase64);
         addToHistory({
-          url: `data:image/png;base64,${resultBase64}`,
-          prompt,
+          url: formatImageSrc(resultBase64),
+          prompt: finalPrompt,
           mode: 'IMAGE_EDITOR'
         });
       } else throw new Error("Không nhận được dữ liệu ảnh.");
     } catch (err: any) { 
       console.error('[ImageEditor] Generation error:', err);
+      setShowConfig(true); // Luôn mở lại thanh cấu hình để người dùng đọc thông báo lỗi
       const errMsg = err.message || "Lỗi khi tạo ảnh.";
       if (errMsg.includes('API key') || errMsg.includes('API_KEY') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('403')) {
         setError("Cần kích hoạt API Key để tạo ảnh trên web. Bấm nút 'Kích hoạt API Key' bên dưới để nhận hướng dẫn.");
@@ -459,7 +515,7 @@ const ImageEditor: React.FC = () => {
   const handleAddToWorkspace = () => {
     if (!resultImage) return;
     addToWorkspace({
-      url: `data:image/png;base64,${resultImage}`,
+      url: formatImageSrc(resultImage),
       prompt: prompt,
       mode: 'IMAGE_EDITOR',
       type: 'image'
@@ -677,7 +733,7 @@ const ImageEditor: React.FC = () => {
             <div className="bg-white/95 dark:bg-[#0f1115]/95 backdrop-blur-2xl p-4 md:p-6 rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col flex-1 overflow-hidden">
                 <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-6 mb-4">
                         {/* CHẤT LƯỢNG XỬ LÝ */}
-                        <ModelSelector selectedModelId={selectedModelId} onModelSelect={setSelectedModelId} />
+                        <ModelSelector selectedModelId={selectedModelId} onModelSelect={handleModelSelect} />
 
                         {/* ĐỘ PHÂN GIẢI & TỶ LỆ */}
                         <div className={`grid ${MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 transition-all duration-300`}>
@@ -833,9 +889,26 @@ const ImageEditor: React.FC = () => {
                                     </div>
 
                                     {refImages.map((img, idx) => (
-                                        <div key={idx} className="relative w-16 h-16 rounded-2xl border border-slate-200 dark:border-white/10 overflow-hidden shrink-0 group shadow-sm hover:ring-2 hover:ring-blue-500/50 transition-all" onClick={(e) => { e.stopPropagation(); setPreviewImage(img); }}>
-                                            <img src={`data:image/png;base64,${img}`} className="w-full h-full object-cover" />
-                                            <button onClick={(e) => { e.stopPropagation(); setRefImages(p => p.filter((_, i) => i !== idx)); }} className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md"><X className="w-2.5 h-2.5" /></button>
+                                        <div key={idx} className="relative w-16 h-16 rounded-2xl border border-slate-200 dark:border-white/10 overflow-hidden shrink-0 group shadow-sm hover:ring-2 hover:ring-blue-500/50 transition-all">
+                                            <img src={formatImageSrc(img)} className="w-full h-full object-cover" alt={`Tham chiếu ${idx + 1}`} />
+                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                                                <button 
+                                                    type="button" 
+                                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(img); }} 
+                                                    className="p-1 bg-white/20 hover:bg-white/40 text-white rounded-lg transition-all" 
+                                                    title="Xem trước"
+                                                >
+                                                    <Eye className="w-3 h-3" />
+                                                </button>
+                                                <button 
+                                                    type="button" 
+                                                    onClick={(e) => { e.stopPropagation(); setRefImages(p => p.filter((_, i) => i !== idx)); }} 
+                                                    className="p-1 bg-red-500 text-white rounded-lg transition-all shadow-md" 
+                                                    title="Xóa ảnh"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -847,7 +920,7 @@ const ImageEditor: React.FC = () => {
                                         <div className="grid grid-cols-4 gap-2 max-h-[200px] overflow-y-auto no-scrollbar">
                                             {refLibrary.map((img, idx) => (
                                                 <div key={idx} className="relative aspect-square rounded-xl overflow-hidden cursor-pointer group" onClick={() => toggleFromLib(img)}>
-                                                    <img src={`data:image/png;base64,${img}`} className={`w-full h-full object-cover transition-all ${refImages.includes(img) ? 'opacity-50' : ''}`} />
+                                                    <img src={formatImageSrc(img)} className={`w-full h-full object-cover transition-all ${refImages.includes(img) ? 'opacity-50' : ''}`} alt={`Thư viện ${idx + 1}`} />
                                                     {refImages.includes(img) && <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20"><Check className="w-4 h-4 text-white" /></div>}
                                                     <button onClick={(e) => { e.stopPropagation(); removeFromLibrary(img); }} className="absolute top-0.5 right-0.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"><X className="w-2 h-2" /></button>
                                                 </div>
@@ -990,6 +1063,19 @@ const ImageEditor: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
+                                  setSelectedModelId(FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
+                                  localStorage.setItem('last_selected_model', FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
+                                  setError(null);
+                                  toast.success('Đã chuyển sang mô hình Google Flow (Nano Banana Pro)!');
+                                }}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
+                              >
+                                🍌 Dùng Google Flow (Nano Banana Pro)
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
                                   setSelectedModelId('gemini-3.1-flash-image');
                                   setError(null);
                                   toast.success('Đã chuyển sang mô hình Gemini API (Nano Banana 2). Bạn có thể bấm Tạo ảnh ngay!');
@@ -1053,13 +1139,13 @@ const ImageEditor: React.FC = () => {
                         <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-[2rem]">
                             {isComparing && (modelImage || beforeUpscaleImage) ? (
                                 <ComparisonSlider 
-                                    beforeImage={`data:image/png;base64,${beforeUpscaleImage || modelImage}`}
-                                    afterImage={`data:image/png;base64,${resultImage}`}
+                                    beforeImage={formatImageSrc(beforeUpscaleImage || modelImage)}
+                                    afterImage={formatImageSrc(resultImage)}
                                     className="w-full h-full max-h-full aspect-square overflow-hidden rounded-[2rem] border border-white/10 shadow-2xl"
                                 />
                             ) : (
                                 <img 
-                                    src={`data:image/png;base64,${resultImage}`} 
+                                    src={formatImageSrc(resultImage)} 
                                     onClick={() => setPreviewImage(resultImage)}
                                     className={`max-h-full max-w-full object-contain rounded-[2rem] shadow-2xl border border-white/10 cursor-zoom-in transition-transform duration-500 ${isUpscaling ? 'blur-sm' : ''}`} 
                                     style={{ transform: `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)` }}
@@ -1108,7 +1194,7 @@ const ImageEditor: React.FC = () => {
                                 >
                                     <Share2 className="w-4 h-4" />
                                 </button>
-                                <a href={`data:image/png;base64,${resultImage}`} download={`yody-${Date.now()}.png`} className="p-3 bg-white text-blue-900 rounded-2xl shadow-lg hover:scale-110" title="Tải xuống"><Download className="w-4 h-4" /></a>
+                                <a href={formatImageSrc(resultImage)} download={`yody-${Date.now()}.png`} className="p-3 bg-white text-blue-900 rounded-2xl shadow-lg hover:scale-110" title="Tải xuống"><Download className="w-4 h-4" /></a>
                             </div>
                         </div>
 
@@ -1122,7 +1208,7 @@ const ImageEditor: React.FC = () => {
                                 <span>Workspace</span>
                             </button>
                             <a 
-                                href={`data:image/png;base64,${resultImage}`} 
+                                href={formatImageSrc(resultImage)} 
                                 download={`yody-${Date.now()}.png`}
                                 className="flex-1 py-4 bg-white dark:bg-white/10 text-slate-900 dark:text-white rounded-2xl font-black uppercase tracking-widest shadow-xl hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 border border-slate-200 dark:border-white/10"
                             >
@@ -1195,12 +1281,13 @@ const ImageEditor: React.FC = () => {
                             {editorHistory.map((item) => (
                                 <div key={item.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 dark:border-white/10 shadow-sm transition-all hover:ring-2 hover:ring-blue-500/50">
                                     <img 
-                                        src={item.url} 
+                                        src={formatImageSrc(item.url)} 
                                         className="w-full h-full object-cover cursor-pointer transition-transform group-hover:scale-110" 
                                         onClick={() => {
-                                            setResultImage(item.url.split(',')[1]);
+                                            setResultImage(item.url);
                                             if (item.prompt) setPrompt(item.prompt);
                                         }}
+                                        alt={item.prompt || 'Lịch sử tạo ảnh'}
                                     />
                                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                         <Plus className="w-5 h-5 text-white" />
@@ -1222,7 +1309,7 @@ const ImageEditor: React.FC = () => {
 
       {isRefining && resultImage && (
         <RefinementEditor 
-          image={resultImage}
+          image={formatImageSrc(resultImage)}
           onClose={() => setIsRefining(false)}
           onSave={handleRefineSave}
           isProcessing={isLoading}
@@ -1230,17 +1317,53 @@ const ImageEditor: React.FC = () => {
       )}
 
       {previewImage && (
-        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex items-center justify-center p-4 md:p-8" onClick={() => setPreviewImage(null)}>
-            <button className="absolute top-6 right-6 z-[110] text-white/60 p-3 rounded-[1.5rem] bg-white/10 active:scale-90 transition-all hover:text-white" onClick={() => setPreviewImage(null)}><X className="w-8 h-8" /></button>
-            <div className="relative flex items-center justify-center w-full h-full overflow-hidden" onClick={(e) => e.stopPropagation()} onWheel={handleWheel} onMouseDown={startDrag} onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag} onTouchStart={startDrag} onTouchMove={onDrag} onTouchEnd={endDrag}>
-                <img src={`data:image/png;base64,${previewImage}`} className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] transition-transform duration-150 ease-out select-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? (isDraggingPreview ? 'grabbing' : 'grab') : 'zoom-in' }} draggable={false} />
-                <div className="absolute bottom-8 flex flex-col md:flex-row items-center gap-4 z-[110]">
-                    <div className="flex items-center gap-2 bg-black/60 backdrop-blur-xl p-2.5 rounded-[1.8rem] border border-white/10 shadow-2xl">
-                        <button onClick={() => setZoom(prev => Math.max(1, prev - 0.5))} className="p-2.5 hover:bg-white/20 rounded-2xl text-white transition-all"><ZoomOut className="w-6 h-6"/></button>
+        <div 
+          className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-2xl flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-200" 
+          onClick={() => setPreviewImage(null)}
+        >
+            <button 
+              type="button"
+              className="absolute top-6 right-6 z-[110] text-white p-3 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-95 transition-all flex items-center gap-2 border border-white/10 shadow-2xl" 
+              onClick={() => setPreviewImage(null)}
+              title="Đóng (Esc)"
+            >
+              <X className="w-5 h-5" />
+              <span className="text-xs font-bold uppercase tracking-wider">Đóng</span>
+            </button>
+            <div 
+              className="relative flex items-center justify-center max-w-full max-h-full overflow-hidden" 
+              onClick={(e) => e.stopPropagation()} 
+              onWheel={handleWheel} 
+              onMouseDown={startDrag} 
+              onMouseMove={onDrag} 
+              onMouseUp={endDrag} 
+              onMouseLeave={endDrag} 
+              onTouchStart={startDrag} 
+              onTouchMove={onDrag} 
+              onTouchEnd={endDrag}
+            >
+                <img 
+                  src={formatImageSrc(previewImage)} 
+                  className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] transition-transform duration-150 ease-out select-none" 
+                  style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? (isDraggingPreview ? 'grabbing' : 'grab') : 'zoom-in' }} 
+                  draggable={false} 
+                  alt="Xem ảnh lớn"
+                />
+                <div className="absolute bottom-6 flex flex-col md:flex-row items-center gap-4 z-[110]" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2 bg-black/70 backdrop-blur-xl p-2.5 rounded-[1.8rem] border border-white/10 shadow-2xl">
+                        <button type="button" onClick={() => setZoom(prev => Math.max(1, prev - 0.5))} className="p-2.5 hover:bg-white/20 rounded-2xl text-white transition-all"><ZoomOut className="w-6 h-6"/></button>
                         <div className="flex flex-col items-center px-4 min-w-[70px] border-x border-white/10"><span className="text-xs font-black text-white">{Math.round(zoom * 100)}%</span><span className="text-[8px] font-bold text-white/50 uppercase tracking-tighter">Scale</span></div>
-                        <button onClick={() => setZoom(prev => Math.min(8, prev + 0.5))} className="p-2.5 hover:bg-white/20 rounded-2xl text-white transition-all"><ZoomIn className="w-6 h-6"/></button>
+                        <button type="button" onClick={() => setZoom(prev => Math.min(8, prev + 0.5))} className="p-2.5 hover:bg-white/20 rounded-2xl text-white transition-all"><ZoomIn className="w-6 h-6"/></button>
                     </div>
-                    <div className="flex gap-2"><a href={`data:image/png;base64,${previewImage}`} download={`yody-hd-${Date.now()}.png`} className="px-8 py-4 bg-white text-blue-900 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.2em] flex items-center gap-3 shadow-2xl hover:bg-blue-50 active:scale-95 transition-all"><Download className="w-5 h-5" /> Export Image</a></div>
+                    <div className="flex gap-2">
+                      <a 
+                        href={formatImageSrc(previewImage)} 
+                        download={`yody-hd-${Date.now()}.png`} 
+                        className="px-8 py-4 bg-white text-blue-900 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.2em] flex items-center gap-3 shadow-2xl hover:bg-blue-50 active:scale-95 transition-all"
+                      >
+                        <Download className="w-5 h-5" /> Tải về
+                      </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1248,7 +1371,7 @@ const ImageEditor: React.FC = () => {
 
       {isEditing && resultImage && (
           <PhotoEditor 
-              imageSrc={resultImage}
+              imageSrc={formatImageSrc(resultImage)}
               onSave={(edited) => { setResultImage(edited); setIsEditing(false); }}
               onClose={() => setIsEditing(false)}
           />

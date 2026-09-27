@@ -1,4 +1,33 @@
 
+/**
+ * Định dạng an toàn cho src ảnh trong HTML/JSX.
+ * Tránh triệt để lỗi double prefix (data:image/png;base64,data:...) làm ảnh bị đen hoặc hỏng.
+ * Tự động nhận diện URL (http/https/blob) hoặc định dạng MIME chính xác (JPEG, PNG, WebP).
+ */
+export const formatImageSrc = (img?: string | null): string => {
+  if (!img) return '';
+  const trimmed = img.trim();
+  if (
+    trimmed.startsWith('data:') || 
+    trimmed.startsWith('http://') || 
+    trimmed.startsWith('https://') || 
+    trimmed.startsWith('/') || 
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+  // JPEG base64 signature
+  if (trimmed.startsWith('/9j/')) {
+    return `data:image/jpeg;base64,${trimmed}`;
+  }
+  // WebP base64 signature (RIFF/WEBP)
+  if (trimmed.startsWith('UklGR')) {
+    return `data:image/webp;base64,${trimmed}`;
+  }
+  // Default to PNG base64
+  return `data:image/png;base64,${trimmed}`;
+};
+
 export const extractRatioFromPrompt = (prompt: string): string | null => {
   const match = prompt.match(/(?:--ar|--aspect|ratio|tỷ lệ|aspect ratio)\s*[:=]?\s*(\d+[:/x]\d+)/i);
   if (match) {

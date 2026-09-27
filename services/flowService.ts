@@ -66,24 +66,67 @@ function base64ToFile(base64: string, mime: string, filename: string): File {
   return new File([u8arr], filename, { type: mime });
 }
 
+export function getFlowApiUrl(endpoint: string): string {
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : undefined;
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+  if (customUrl) {
+    const base = customUrl.replace(/\/+$/, '');
+    if (cleanEndpoint === '/health') {
+      return `${base}/health`;
+    }
+    return `${base}/api${cleanEndpoint.replace(/^\/api/, '')}`;
+  }
+
+  return `${FLOW_PROXY_BASE}${cleanEndpoint}`;
+}
+
+/**
+ * An toàn parse JSON từ Google Flow backend proxy.
+ * Phát hiện và chặn lỗi khi backend trả về HTML (ví dụ: static hosting rewrite về index.html).
+ */
+async function parseJsonResponse<T = any>(res: Response, endpointDesc: string): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+
+  // Khi chạy trên hosting tĩnh (Firebase Hosting, GitHub Pages) hoặc khi chưa bật server,
+  // server thường rewrite URL về /index.html (bắt đầu bằng <!DOCTYPE html>).
+  if (!contentType.includes('application/json')) {
+    const text = await res.text().catch(() => '');
+    if (text.includes('<!DOCTYPE') || text.includes('<html') || contentType.includes('text/html')) {
+      throw new Error(
+        'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. ' +
+        'Để tạo ảnh/video bằng mô hình Google Flow, vui lòng chạy backend ở máy local: `npm run dev:flow` ' +
+        'hoặc chuyển sang mô hình Gemini API (trong mục AI Model Engine).'
+      );
+    }
+    throw new Error(`${endpointDesc} thất bại: Máy chủ không phản hồi định dạng JSON (${res.status} ${res.statusText}).`);
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
+    throw new Error(err.detail || err.error || `${endpointDesc} thất bại (HTTP ${res.status})`);
+  }
+
+  return await res.json();
+}
+
 // ── Session ───────────────────────────────────────────────────────────────────
 
 export async function checkFlowSession(): Promise<FlowSessionStatus> {
-  const res = await fetch(`${FLOW_PROXY_BASE}/session-status`);
-  if (!res.ok) throw new Error('Flow backend không phản hồi');
-  return res.json();
+  const res = await fetch(getFlowApiUrl('/session-status'));
+  return parseJsonResponse<FlowSessionStatus>(res, 'Kiểm tra phiên đăng nhập Flow');
 }
 
 export async function clearFlowSession(): Promise<void> {
-  await fetch(`${FLOW_PROXY_BASE}/clear-session`, { method: 'POST' });
+  const res = await fetch(getFlowApiUrl('/clear-session'), { method: 'POST' });
+  return parseJsonResponse(res, 'Xóa phiên Flow');
 }
 
 // ── Job Polling ───────────────────────────────────────────────────────────────
 
 export async function getFlowJobStatus(jobId: string): Promise<FlowJobStatus> {
-  const res = await fetch(`${FLOW_PROXY_BASE}/job/${jobId}`);
-  if (!res.ok) throw new Error(`Không tìm thấy job: ${jobId}`);
-  return res.json();
+  const res = await fetch(getFlowApiUrl(`/job/${jobId}`));
+  return parseJsonResponse<FlowJobStatus>(res, `Kiểm tra trạng thái job ${jobId}`);
 }
 
 export async function pollFlowJob(
@@ -128,17 +171,12 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
     formData.append('reference_image', file);
   }
 
-  const res = await fetch(`${FLOW_PROXY_BASE}/generate-image`, {
+  const res = await fetch(getFlowApiUrl('/generate-image'), {
     method: 'POST',
     body: formData,
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Lỗi không xác định' }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
+  const data = await parseJsonResponse<{ job_id: string }>(res, 'Tạo ảnh qua Google Flow');
   return data.job_id;
 }
 
@@ -178,17 +216,12 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
     formData.append('reference_image', file);
   }
 
-  const res = await fetch(`${FLOW_PROXY_BASE}/generate-video`, {
+  const res = await fetch(getFlowApiUrl('/generate-video'), {
     method: 'POST',
     body: formData,
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Lỗi không xác định' }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
+  const data = await parseJsonResponse<{ job_id: string }>(res, 'Tạo video qua Google Flow');
   return data.job_id;
 }
 
@@ -209,23 +242,30 @@ export async function generateVideoViaFlow(
 // ── Prompt Enhancement ────────────────────────────────────────────────────────
 
 export async function enhancePromptViaFlow(prompt: string, mode: 'image' | 'video' = 'image'): Promise<string> {
-  const res = await fetch(`${FLOW_PROXY_BASE}/enhance-prompt`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, mode }),
-  });
+  try {
+    const res = await fetch(getFlowApiUrl('/enhance-prompt'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, mode }),
+    });
 
-  if (!res.ok) return prompt;
-  const data = await res.json();
-  return data.enhanced_prompt || prompt;
+    const data = await parseJsonResponse<{ enhanced_prompt?: string }>(res, 'Tối ưu prompt');
+    return data.enhanced_prompt || prompt;
+  } catch {
+    return prompt;
+  }
 }
 
 // ── Backend Health Check ──────────────────────────────────────────────────────
 
 export async function isFlowBackendAvailable(): Promise<boolean> {
   try {
-    const res = await fetch(`${FLOW_PROXY_BASE}/health`, { signal: AbortSignal.timeout(5000) });
-    return res.ok;
+    const res = await fetch(getFlowApiUrl('/health'), { signal: AbortSignal.timeout(3000) });
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok || !contentType.includes('application/json')) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -256,3 +296,17 @@ export function isFlowModel(modelId?: string): boolean {
   if (!modelId) return false;
   return modelId.startsWith('google-flow-');
 }
+
+/**
+ * Bản đồ chuyển tiếp tự động từ mô hình Google Flow sang mô hình Cloud Gemini API tương ứng.
+ * Giúp người dùng trên web bình thường (không chạy local python backend) vẫn tạo ảnh/video mượt mà!
+ */
+export const FLOW_TO_GEMINI_MAP: Record<string, string> = {
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO]: 'gemini-3-pro-image',     // Nano Banana Pro
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2]: 'gemini-3.1-flash-image',   // Nano Banana 2
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_LITE]: 'gemini-3.1-flash-lite-image', // Nano Banana Lite
+  [FLOW_MODEL_IDS.VIDEO_VEO_QUALITY]: 'veo',
+  [FLOW_MODEL_IDS.VIDEO_VEO_FAST]: 'veo',
+  [FLOW_MODEL_IDS.VIDEO_VEO_LITE]: 'veo',
+  [FLOW_MODEL_IDS.VIDEO_OMNI_FLASH]: 'veo',
+};

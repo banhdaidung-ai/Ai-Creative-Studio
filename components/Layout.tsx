@@ -31,8 +31,9 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
 
   useEffect(() => {
     const checkKey = async () => {
-        // Kiểm tra xem đã có key hoặc Google Pro trong localStorage chưa
+        // Người dùng đã đăng nhập hoặc đã có key/Google Pro
         if (
+            user ||
             localStorage.getItem('gemini_api_key') || 
             localStorage.getItem('google_account_pro') === 'true' || 
             (localStorage.getItem('vertex_project_id') && localStorage.getItem('vertex_access_token'))
@@ -47,7 +48,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
         }
     };
     checkKey();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     // Check Vertex Token Expiry every minute
@@ -81,6 +82,11 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
         setConfigType('google');
       }
   };
+
+  useEffect(() => {
+    window.addEventListener('open_unlock_modal', handleOpenUnlock);
+    return () => window.removeEventListener('open_unlock_modal', handleOpenUnlock);
+  }, []);
 
   const handleProjectKey = async () => {
     if (window.aistudio?.openSelectKey) {
@@ -463,13 +469,26 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                             
                             <div className="space-y-3">
                                 {configType === 'google' ? (
-                                    <input 
-                                        type="text" 
-                                        value={manualKey}
-                                        onChange={(e) => setManualKey(e.target.value)}
-                                        placeholder="Paste API Key (AIza...) here..." 
-                                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-[10px] text-white outline-none focus:border-purple-500 transition-all font-mono"
-                                    />
+                                    <div className="space-y-1.5">
+                                      <div className="flex items-center justify-between text-[10px]">
+                                        <span className="text-slate-400">Gemini API Key</span>
+                                        <a 
+                                          href="https://aistudio.google.com/apikey" 
+                                          target="_blank" 
+                                          rel="noreferrer" 
+                                          className="text-amber-400 hover:text-amber-300 font-bold underline flex items-center gap-1"
+                                        >
+                                          Lấy Key Miễn Phí (Google AI Studio) ↗
+                                        </a>
+                                      </div>
+                                      <input 
+                                          type="text" 
+                                          value={manualKey}
+                                          onChange={(e) => setManualKey(e.target.value)}
+                                          placeholder="Dán API Key (AIzaSy...) vào đây..." 
+                                          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-[10px] text-white outline-none focus:border-purple-500 transition-all font-mono"
+                                      />
+                                    </div>
                                 ) : (
                                     <div className="space-y-2">
                                         <input 

@@ -10,14 +10,26 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        proxy: {
+          '/api/flow': {
+            target: 'http://localhost:8000',
+            changeOrigin: true,
+            rewrite: (path) => {
+              if (path === '/api/flow/health' || path === '/api/flow/') {
+                return path.replace(/^\/api\/flow/, '');
+              }
+              return path.replace(/^\/api\/flow/, '/api');
+            },
+          },
+        },
       },
       plugins: [
         react(), 
         tailwindcss(),
       ],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY || ''),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || ''),
+        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.API_KEY || ''),
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.API_KEY || ''),
         'process.env.VERTEX_PROJECT_ID': JSON.stringify(''),
         'process.env.VERTEX_LOCATION': JSON.stringify('us-central1'),
         'process.env.VERTEX_ACCESS_TOKEN': JSON.stringify(''),

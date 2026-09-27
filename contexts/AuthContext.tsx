@@ -41,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
+      if (firebaseUser) {
+        localStorage.setItem('google_account_pro', 'true');
+        localStorage.setItem('google_account_email', firebaseUser.email || '');
+        window.dispatchEvent(new Event('gemini_api_key_updated'));
+      }
       setLoading(false);
     });
     return () => unsubscribe();

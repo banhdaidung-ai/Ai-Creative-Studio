@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { geminiService } from '../services/gemini';
-import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
+import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
 import { resizeImage, smoothImage, extractRatioFromPrompt } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
 import PhotoEditor from './PhotoEditor';
@@ -50,7 +50,7 @@ const ImageEditor: React.FC = () => {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isEditing, setIsEditing] = useState(false);
   const [timer, setTimer] = useState(0);
-  const [selectedModelId, setSelectedModelId] = useState<string>(FLOW_MODEL_IDS.IMAGE);
+  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-image');
   const [aspectRatio, setAspectRatio] = useState('1:1');
 
   useEffect(() => {
@@ -327,37 +327,85 @@ const ImageEditor: React.FC = () => {
     if (window.innerWidth < 1024) setShowConfig(false);
 
     try {
-      // ── Google Flow path ──────────────────────────────────────────────────
+      // ── Google Flow path (với tính năng tự động chuyển tiếp thông minh cho Web) ─────────────
       if (usingFlow) {
-        const flowResult = await generateImageViaFlow(
-          {
-            prompt: prompt || 'Generate a high quality image',
-            aspectRatio,
-            numImages: 1,
-            referenceImageBase64: modelImage || undefined,
-            referenceImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
-          },
-          (progress, message) => {
-            setLoadingMessage(message || `Google Flow (${progress}%)`);
-          }
-        );
-
-        if (flowResult) {
-          playSuccessSound();
-          // flowResult is a data URI from Google Flow
-          const base64Part = flowResult.startsWith('data:')
-            ? flowResult.split(',')[1]
-            : flowResult;
-          setResultImage(base64Part);
-          addToHistory({
-            url: flowResult,
-            prompt,
-            mode: 'IMAGE_EDITOR'
-          });
-        } else {
-          throw new Error("Google Flow không trả về ảnh.");
+        let isLocalFlowActive = false;
+        try {
+          isLocalFlowActive = await isFlowBackendAvailable();
+        } catch {
+          isLocalFlowActive = false;
         }
-        return;
+
+        if (isLocalFlowActive) {
+          const flowResult = await generateImageViaFlow(
+            {
+              prompt: prompt || 'Generate a high quality image',
+              aspectRatio,
+              numImages: 1,
+              referenceImageBase64: modelImage || undefined,
+              referenceImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+            },
+            (progress, message) => {
+              setLoadingMessage(message || `Google Flow (${progress}%)`);
+            }
+          );
+
+          if (flowResult) {
+            playSuccessSound();
+            const base64Part = flowResult.startsWith('data:')
+              ? flowResult.split(',')[1]
+              : flowResult;
+            setResultImage(base64Part);
+            addToHistory({
+              url: flowResult,
+              prompt,
+              mode: 'IMAGE_EDITOR'
+            });
+            return;
+          } else {
+            throw new Error("Google Flow không trả về ảnh.");
+          }
+        } else {
+          // Flow backend không chạy ở client (người dùng web thông thường)
+          // Tự động chuyển tiếp sang mô hình Cloud AI tương ứng để tạo ảnh trực tiếp!
+          const targetCloudModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+          console.log(`[ImageEditor] Flow backend offline, auto-routing ${selectedModelId} → ${targetCloudModel}`);
+          toast.info('🌐 Đang tạo ảnh qua Cloud AI Studio...');
+          setLoadingMessage("Đang tạo ảnh qua Cloud AI Studio...");
+
+          const genConfig = { 
+            modelId: targetCloudModel, 
+            aspectRatio, 
+            imageSize,
+            negativePrompt,
+            seed,
+            cfgScale
+          };
+
+          const finalRefs = [...refImages];
+          let finalPrompt = prompt || 'Generate a high quality image';
+          if (maskImage) {
+              finalRefs.push(maskImage);
+              finalPrompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
+          }
+
+          let resultBase64: string | undefined;
+          if (modelImage) resultBase64 = await geminiService.editImage(modelImage, finalPrompt, finalRefs, genConfig);
+          else resultBase64 = await geminiService.generateImage(finalPrompt, genConfig, finalRefs);
+          
+          if (resultBase64) {
+            playSuccessSound();
+            setResultImage(resultBase64);
+            addToHistory({
+              url: `data:image/png;base64,${resultBase64}`,
+              prompt,
+              mode: 'IMAGE_EDITOR'
+            });
+            return;
+          } else {
+            throw new Error("Không nhận được dữ liệu ảnh từ Cloud AI.");
+          }
+        }
       }
 
       // ── Gemini API path ───────────────────────────────────────────────────
@@ -390,7 +438,17 @@ const ImageEditor: React.FC = () => {
           mode: 'IMAGE_EDITOR'
         });
       } else throw new Error("Không nhận được dữ liệu ảnh.");
-    } catch (err: any) { setError(err.message || "Lỗi khi tạo ảnh."); } finally { setIsLoading(false); }
+    } catch (err: any) { 
+      console.error('[ImageEditor] Generation error:', err);
+      const errMsg = err.message || "Lỗi khi tạo ảnh.";
+      if (errMsg.includes('API key') || errMsg.includes('API_KEY') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('403')) {
+        setError("Cần kích hoạt API Key để tạo ảnh trên web. Bấm nút 'Kích hoạt API Key' bên dưới để nhận hướng dẫn.");
+      } else {
+        setError(errMsg);
+      }
+    } finally { 
+      setIsLoading(false); 
+    }
   };
 
   const handleAddToWorkspace = () => {
@@ -443,9 +501,10 @@ const ImageEditor: React.FC = () => {
         setApiKeySelected(true); 
       } catch (e) { 
         console.error("Key selection failed", e); 
+        window.dispatchEvent(new Event('open_unlock_modal'));
       } 
     } else {
-      toast.info('Vui lòng kích hoạt Pro bằng tài khoản Google hoặc nhập API Key tại nút Unlock Pro bên góc trái!');
+      window.dispatchEvent(new Event('open_unlock_modal'));
     }
   };
 
@@ -902,9 +961,51 @@ const ImageEditor: React.FC = () => {
                         </button>
                         
                         {error && (
-                          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
-                            <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-                            <p className="text-xs text-red-600 dark:text-red-400 font-medium">{error}</p>
+                          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2">
+                            <div className="flex items-start gap-3">
+                              <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                              <div className="space-y-1 flex-1">
+                                <p className="text-xs text-red-600 dark:text-red-400 font-bold">
+                                  {error.includes('FLOW_BACKEND_UNAVAILABLE') ? 'Google Flow Backend chưa kết nối' : 'Đã xảy ra lỗi khi tạo ảnh'}
+                                </p>
+                                <p className="text-[11px] text-red-500/90 dark:text-red-300 leading-relaxed">
+                                  {error.replace('FLOW_BACKEND_UNAVAILABLE: ', '')}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Quick Action Buttons */}
+                            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-red-500/10">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedModelId('gemini-3.1-flash-image');
+                                  setError(null);
+                                  toast.success('Đã chuyển sang mô hình Gemini API (Nano Banana 2). Bạn có thể bấm Tạo ảnh ngay!');
+                                  if (!apiKeySelected) {
+                                    window.dispatchEvent(new Event('open_unlock_modal'));
+                                  }
+                                }}
+                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
+                              >
+                                <Sparkles size={13} />
+                                Chuyển sang Gemini API (Nano Banana 2)
+                              </button>
+
+                              {usingFlow && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toast.info('Để dùng Google Flow trên máy local, mở Terminal và chạy lệnh:\nnpm run dev:flow', {
+                                      duration: 8000,
+                                    });
+                                  }}
+                                  className="px-3 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-slate-700 dark:text-white rounded-xl text-[11px] font-medium transition-all border border-slate-200 dark:border-white/10"
+                                >
+                                  💻 Cách bật Local Backend
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                     </div>

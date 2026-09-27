@@ -40,6 +40,15 @@ export const MODEL_OPTIONS = [
   { id: 'imagen-4.0-generate-001', name: 'Imagen 4', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
 ];
 
+export const normalizeModelId = (modelId?: string): string => {
+  if (!modelId) return 'gemini-3.1-flash-image';
+  if (modelId === 'gemini-2.5-flash-image') return 'gemini-3.1-flash-lite-image';
+  if (modelId === 'google-flow-nano-banana-pro') return 'gemini-3-pro-image';
+  if (modelId === 'google-flow-nano-banana-2') return 'gemini-3.1-flash-image';
+  if (modelId === 'google-flow-nano-banana-2-lite') return 'gemini-3.1-flash-lite-image';
+  return modelId;
+};
+
 export const isKeyInvalid = (key?: string): boolean => {
   if (!key) return true;
   const k = key.trim();
@@ -476,9 +485,10 @@ export class GeminiService {
     referenceImagesBase64: string[] = []
   ): Promise<string | undefined> {
     const client = this.getClient();
+    const effectiveModel = normalizeModelId(config.modelId);
     
     // Handle Imagen 4 specifically
-    if (config.modelId === 'imagen-4.0-generate-001') {
+    if (effectiveModel === 'imagen-4.0-generate-001') {
         const { projectId, location, accessToken } = this.getVertexConfig();
         const MAX_RETRIES = 3;
         const RETRY_DELAY = 2000; // 2 seconds
@@ -592,13 +602,13 @@ export class GeminiService {
         temperature: config.cfgScale ? (config.cfgScale / 10) : 0.4,
         seed: config.seed
     };
-    if (config.modelId.includes('pro') && config.imageSize) {
+    if (effectiveModel.includes('pro') && config.imageSize) {
         apiConfig.imageConfig.imageSize = config.imageSize;
     }
 
     try {
         const response = await this.callModel({
-            model: config.modelId,
+            model: effectiveModel,
             contents: { parts },
             config: apiConfig
         });
@@ -767,7 +777,7 @@ export class GeminiService {
 
     parts.push({ text: enhancedPrompt });
 
-    const modelName = config.modelId === 'gemini-2.5-flash-image' ? 'gemini-3.1-flash-lite-image' : config.modelId;
+    const modelName = normalizeModelId(config.modelId);
     const imageConfig: any = { aspectRatio: this.getNormalizedAspectRatio(config.aspectRatio) };
     const selectedModel = MODEL_OPTIONS.find(m => m.id === modelName);
     const tier = selectedModel?.tier || 'standard';
@@ -819,9 +829,9 @@ export class GeminiService {
         stylePrompt?: string;
       }
   ): Promise<string | null> {
-    const selectedModel = MODEL_OPTIONS.find(m => m.id === config.modelId) || MODEL_OPTIONS[0];
+    const modelName = normalizeModelId(config.modelId);
+    const selectedModel = MODEL_OPTIONS.find(m => m.id === modelName) || MODEL_OPTIONS[0];
     const tier = selectedModel?.tier || 'standard';
-    const modelName = config.modelId === 'gemini-2.5-flash-image' ? 'gemini-3.1-flash-lite-image' : config.modelId;
     
     const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
     if (!angleConfig) return null;

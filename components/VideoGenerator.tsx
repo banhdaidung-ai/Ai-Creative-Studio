@@ -1,11 +1,12 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { geminiService } from '../services/gemini';
-import { generateVideoViaFlow, FLOW_MODEL_IDS } from '../services/flowService';
+import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable } from '../services/flowService';
 import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Plus, Globe } from 'lucide-react';
 import { fileToBase64 } from '../utils/image';
 import { useProject } from '../src/context/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'sonner';
 
 const VideoGenerator: React.FC = () => {
   const { workspaceAsset, addToWorkspace } = useProject();
@@ -17,7 +18,7 @@ const VideoGenerator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
-  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow'>('flow');
+  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow'>('gemini');
   const [flowVideoModel, setFlowVideoModel] = useState<string>(FLOW_MODEL_IDS.VIDEO_VEO_QUALITY);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const [duration, setDuration] = useState<number>(5);
@@ -56,12 +57,12 @@ const VideoGenerator: React.FC = () => {
         try {
             await window.aistudio.openSelectKey();
             setApiKeySelected(true);
-        } catch (e) { console.error(e); }
+        } catch (e) { 
+          console.error(e); 
+          window.dispatchEvent(new Event('open_unlock_modal'));
+        }
     } else {
-        // Tự động kích hoạt Pro bằng tài khoản hiện tại
-        localStorage.setItem('google_account_pro', 'true');
-        setApiKeySelected(true);
-        window.dispatchEvent(new Event('gemini_api_key_updated'));
+        window.dispatchEvent(new Event('open_unlock_modal'));
     }
   };
 
@@ -96,30 +97,45 @@ const VideoGenerator: React.FC = () => {
 
     try {
       if (usingFlow) {
-        // ── Google Flow (Veo / Omni) path ──────────────────────────────
-        setStatus(`Đang kết nối Google Flow (${flowVideoModel})...`);
-        const url = await generateVideoViaFlow(
-          {
-            prompt,
-            aspectRatio,
-            duration,
-            model: flowVideoModel,
-            referenceImageBase64: image || undefined,
-            referenceImageMime: 'image/jpeg',
-          },
-          (prog, message) => {
-            setProgress(prog);
-            setStatus(message);
-          }
-        );
-        if (url) {
-          setVideoUrl(url);
-        } else {
-          setError("Google Flow không trả về video.");
+        let isLocalFlowActive = false;
+        try {
+          isLocalFlowActive = await isFlowBackendAvailable();
+        } catch {
+          isLocalFlowActive = false;
         }
-      } else {
-        // ── Gemini Veo path ────────────────────────────────────────────
-        setStatus('Đang khởi tạo phiên làm việc...');
+
+        if (isLocalFlowActive) {
+          // ── Google Flow (Veo / Omni) path ──────────────────────────────
+          setStatus(`Đang kết nối Google Flow (${flowVideoModel})...`);
+          const url = await generateVideoViaFlow(
+            {
+              prompt,
+              aspectRatio,
+              duration,
+              model: flowVideoModel,
+              referenceImageBase64: image || undefined,
+              referenceImageMime: 'image/jpeg',
+            },
+            (prog, message) => {
+              setProgress(prog);
+              setStatus(message);
+            }
+          );
+          if (url) {
+            setVideoUrl(url);
+            return;
+          } else {
+            setError("Google Flow không trả về video.");
+            return;
+          }
+        } else {
+          // Flow backend is not available locally -> auto-route to Cloud Veo!
+          toast.info('🌐 Đang tạo video qua Google Veo Cloud AI...');
+        }
+      }
+
+      // ── Gemini Veo path ────────────────────────────────────────────
+      setStatus('Đang khởi tạo phiên làm việc với Google Veo Cloud...');
         let currentProgress = 0;
         const statusInterval = setInterval(() => {
           const messages = [
@@ -144,7 +160,6 @@ const VideoGenerator: React.FC = () => {
         } else {
           setError("Không nhận được kết quả từ server.");
         }
-      }
     } catch (err: any) {
       setError(err.message || "Lỗi khi tạo video.");
     } finally {
@@ -446,9 +461,48 @@ const VideoGenerator: React.FC = () => {
         </div>
 
         {error && (
-          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400 animate-in slide-in-from-bottom-2">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <p className="text-xs font-bold uppercase tracking-wide">{error}</p>
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl space-y-3 text-red-400 animate-in slide-in-from-bottom-2">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+              <div className="space-y-1 flex-1">
+                <p className="text-xs font-bold uppercase tracking-wide">
+                  {error.includes('FLOW_BACKEND_UNAVAILABLE') ? 'Google Flow Backend chưa kết nối' : 'Đã xảy ra lỗi khi tạo video'}
+                </p>
+                <p className="text-[11px] text-red-300 font-normal leading-relaxed">
+                  {error.replace('FLOW_BACKEND_UNAVAILABLE: ', '')}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-red-500/10">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedVideoModel('veo');
+                  setError(null);
+                  toast.success('Đã chuyển sang mô hình Gemini Veo.');
+                  if (!apiKeySelected) {
+                    window.dispatchEvent(new Event('open_unlock_modal'));
+                  }
+                }}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-[11px] font-bold transition-all shadow-md active:scale-95"
+              >
+                Chuyển sang Gemini Veo (API)
+              </button>
+              {usingFlow && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.info('Để dùng Google Flow Video, mở Terminal và chạy lệnh:\nnpm run dev:flow', {
+                      duration: 8000,
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/15 text-white rounded-xl text-[11px] font-medium transition-all border border-white/10"
+                >
+                  💻 Cách bật Local Backend
+                </button>
+              )}
+            </div>
           </div>
         )}
 

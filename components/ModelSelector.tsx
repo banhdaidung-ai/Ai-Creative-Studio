@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MODEL_OPTIONS } from '../services/gemini';
-import { FLOW_MODEL_IDS, isFlowModel } from '../services/flowService';
+import { FLOW_MODEL_IDS, isFlowModel, isFlowBackendAvailable } from '../services/flowService';
 import { Sparkles, Zap, Image as ImageIcon, Palette, ChevronDown, Video, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -74,12 +74,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [activeTab, setActiveTab] = useState<'gemini' | 'flow'>(
     isFlowModel(selectedModelId) ? 'flow' : 'gemini'
   );
+  const [flowBackendOnline, setFlowBackendOnline] = useState<boolean | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedGeminiModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
   const selectedFlowModel = FLOW_MODEL_OPTIONS.find(m => m.id === selectedModelId);
   const selectedModel = selectedGeminiModel || selectedFlowModel || FLOW_MODEL_OPTIONS[0];
   const isFlowSelected = !!selectedFlowModel;
+
+  useEffect(() => {
+    isFlowBackendAvailable().then(isOnline => {
+      setFlowBackendOnline(isOnline);
+    });
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -169,13 +176,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 </button>
                 <button
                   onClick={() => setActiveTab('flow')}
-                  className={`flex-1 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all ${
+                  className={`flex-1 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
                     activeTab === 'flow'
                       ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 border-b-2 border-emerald-500'
                       : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >
-                  🌐 Google Flow
+                  <span>🌐 Google Flow</span>
+                  {flowBackendOnline === false && (
+                    <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold normal-case">
+                      Local
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -268,18 +280,32 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               {activeTab === 'flow' && (
                 <>
                   {/* Flow Info Banner */}
-                  <div className="mx-3 mt-3 mb-2 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30">
-                    <div className="flex items-start gap-2">
-                      <span className="text-lg">🌐</span>
-                      <div>
-                        <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">Google Flow — Không cần API Key</p>
-                        <p className="text-[9px] text-emerald-600 dark:text-emerald-400 leading-relaxed">
-                          Dùng tài khoản Google của bạn để tạo ảnh/video qua Google Flow.
-                          Yêu cầu cấu hình <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">GOOGLE_EMAIL</code> và <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">GOOGLE_PASSWORD</code> trong <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">flow-backend/.env</code>.
-                        </p>
+                  {flowBackendOnline === false ? (
+                    <div className="mx-3 mt-3 mb-2 p-3 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 space-y-2">
+                      <div className="flex items-start gap-2">
+                        <span className="text-base">🌐</span>
+                        <div className="flex-1">
+                          <p className="text-[10px] font-bold text-blue-700 dark:text-blue-300">Chế độ Web Trực Tiếp</p>
+                          <p className="text-[9px] text-blue-600 dark:text-blue-400 leading-relaxed mt-0.5">
+                            Bạn đang dùng trên web mà không cần chạy backend máy tính. Khi chọn các mô hình này, Studio sẽ <strong>tự động kết nối Cloud AI (Nano Banana / Veo)</strong> để tạo nội dung ngay lập tức!
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="mx-3 mt-3 mb-2 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30">
+                      <div className="flex items-start gap-2">
+                        <span className="text-lg">🌐</span>
+                        <div>
+                          <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">Google Flow — Không cần API Key</p>
+                          <p className="text-[9px] text-emerald-600 dark:text-emerald-400 leading-relaxed">
+                            Dùng tài khoản Google của bạn để tạo ảnh/video qua Google Flow.
+                            Yêu cầu cấu hình <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">GOOGLE_EMAIL</code> và <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">GOOGLE_PASSWORD</code> trong <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1 rounded">flow-backend/.env</code>.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="p-1.5 pb-4 max-h-[360px] overflow-y-auto custom-scrollbar space-y-3">
                     {/* Nhóm Mô hình Hình ảnh */}

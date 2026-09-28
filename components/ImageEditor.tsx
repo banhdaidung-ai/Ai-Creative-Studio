@@ -426,45 +426,8 @@ const ImageEditor: React.FC = () => {
             throw new Error("Google Flow không trả về ảnh.");
           }
         } else {
-          // Flow backend không chạy ở client (người dùng web thông thường)
-          // Tự động chuyển tiếp sang mô hình Cloud AI tương ứng để tạo ảnh trực tiếp!
-          const targetCloudModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-3.1-flash-image';
-          console.log(`[ImageEditor] Flow backend offline, auto-routing ${effectiveModelId} → ${targetCloudModel}`);
-          toast.info('🌐 Đang tạo ảnh qua Cloud AI Studio...');
-          setLoadingMessage("Đang tạo ảnh qua Cloud AI Studio...");
-
-          const genConfig = { 
-            modelId: targetCloudModel, 
-            aspectRatio, 
-            imageSize,
-            negativePrompt,
-            seed,
-            cfgScale
-          };
-
-          const finalRefs = [...refImages];
-          let finalPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao';
-          if (maskImage) {
-              finalRefs.push(maskImage);
-              finalPrompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
-          }
-
-          let resultBase64: string | undefined;
-          if (modelImage) resultBase64 = await geminiService.editImage(modelImage, finalPrompt, finalRefs, genConfig);
-          else resultBase64 = await geminiService.generateImage(finalPrompt, genConfig, finalRefs);
-          
-          if (resultBase64) {
-            playSuccessSound();
-            setResultImage(resultBase64);
-            addToHistory({
-              url: formatImageSrc(resultBase64),
-              prompt: finalPrompt,
-              mode: 'IMAGE_EDITOR'
-            });
-            return;
-          } else {
-            throw new Error("Không nhận được dữ liệu ảnh từ Cloud AI.");
-          }
+          // Flow backend không khả dụng
+          throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online hoặc sử dụng mô hình API thay thế.');
         }
       }
 

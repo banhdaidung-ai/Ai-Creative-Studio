@@ -70,10 +70,13 @@ function base64ToFile(base64: string, mime: string, filename: string): File {
 
 export function getFlowApiUrl(endpoint: string): string {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : undefined;
+  const envUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FLOW_BACKEND_URL ? import.meta.env.VITE_FLOW_BACKEND_URL : undefined;
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
-  if (customUrl) {
-    const base = customUrl.replace(/\/+$/, '');
+  const targetBase = customUrl || envUrl;
+
+  if (targetBase) {
+    const base = targetBase.replace(/\/+$/, '');
     if (cleanEndpoint === '/health') {
       return `${base}/health`;
     }

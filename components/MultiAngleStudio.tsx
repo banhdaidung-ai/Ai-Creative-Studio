@@ -298,6 +298,8 @@ const MultiAngleStudio: React.FC = () => {
             if (flowResult) {
                 result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
             }
+        } else if (isFlow && !flowReady) {
+            throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online.');
         } else {
             result = await geminiService.generateSingleAngle(
                 modelImage, 

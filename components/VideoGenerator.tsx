@@ -137,10 +137,10 @@ const VideoGenerator: React.FC = () => {
             return;
           }
         } else {
-          // Flow backend is not available locally -> auto-route to Cloud Veo!
-          toast.info('🌐 Đang tạo video qua Google Veo Cloud AI...');
+          // Flow backend is not available locally -> THROW ERROR
+          throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online.');
         }
-      }
+      } else {
 
       // ── Gemini Veo path ────────────────────────────────────────────
       setStatus('Đang khởi tạo phiên làm việc với Google Veo Cloud...');

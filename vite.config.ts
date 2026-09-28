@@ -39,6 +39,7 @@ export default defineConfig(({ mode }) => {
         'import.meta.env.VITE_FIREBASE_STORAGE_BUCKET': JSON.stringify(env.VITE_FIREBASE_STORAGE_BUCKET || 'ai-creative-studio-2026.firebasestorage.app'),
         'import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(env.VITE_FIREBASE_MESSAGING_SENDER_ID || '540235016555'),
         'import.meta.env.VITE_FIREBASE_APP_ID': JSON.stringify(env.VITE_FIREBASE_APP_ID || '1:540235016555:web:d0c38b25c83311408c842e'),
+        'import.meta.env.VITE_FLOW_BACKEND_URL': JSON.stringify(env.VITE_FLOW_BACKEND_URL || ''),
       },
       resolve: {
         alias: {

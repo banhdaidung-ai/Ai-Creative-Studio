@@ -5,7 +5,7 @@ import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailab
 import { resizeImage, smoothImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
 import PhotoEditor from './PhotoEditor';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { toast } from 'sonner';
 import { 
   X, Loader2, Sparkles, Image as ImageIcon, 

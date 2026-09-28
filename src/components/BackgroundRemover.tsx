@@ -8,7 +8,7 @@ import {
   Settings2, Sparkles, Wand2, Plus, Trash2, Maximize2, LayoutGrid
 } from 'lucide-react';
 import { fileToBase64, applyMask } from '../utils/image';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { Stage, Layer, Image as KonvaImage, Line } from 'react-konva';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';

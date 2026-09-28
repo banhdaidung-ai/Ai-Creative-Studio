@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Trash2, Sparkles, Copy, Check, X } from 'lucide-react';
-import { STARTER_PROMPTS } from '../src/constants/starterPrompts';
+import { STARTER_PROMPTS } from '../constants/starterPrompts';
 import { PromptTemplate, AppMode } from '../types';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 

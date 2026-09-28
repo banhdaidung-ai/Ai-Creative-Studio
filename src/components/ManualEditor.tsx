@@ -3,7 +3,7 @@ import React, { useState, useRef } from 'react';
 import { resizeImage } from '../utils/image';
 import PhotoEditor from './PhotoEditor';
 import { Edit3, Upload, Box } from 'lucide-react';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 
 const ManualEditor: React.FC = () => {
   const { workspaceAsset, updateWorkspaceAsset } = useProject();

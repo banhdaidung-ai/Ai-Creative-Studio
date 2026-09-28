@@ -6,7 +6,7 @@ import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, extractRatioFromPrompt } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
 import PhotoEditor from './PhotoEditor';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { 
   Shirt, Sliders, RefreshCw, Maximize2, X, Loader2, Layers, 
   CheckSquare, Square, Box, Columns, Eye, ZoomIn, ZoomOut, ChevronDown, Settings2, ChevronUp, Crown,
@@ -375,6 +375,13 @@ const BatchFashionStudio: React.FC = () => {
         );
 
         if (result) {
+            statusUpdate('Đang kiểm duyệt chất lượng...');
+            const review = await geminiService.reviewImage(result);
+            if (!review.pass) {
+                setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', statusMessage: review.reason || 'Lỗi AI' } : j));
+                return;
+            }
+
             setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'completed', resultBase64: result } : j));
             setSelectedJobs(prev => new Set(prev).add(jobId));
             

@@ -6,7 +6,7 @@ import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, extractRatioFromPrompt } from '../utils/image';
 import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
 import PhotoEditor from './PhotoEditor';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { 
   Camera, Upload, RefreshCw, Download, DownloadCloud,
   Lightbulb, Loader2, Maximize2, X, Layers, Zap, Crown,

@@ -17,7 +17,7 @@ import {
   Box,
   Maximize2
 } from 'lucide-react';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { toast } from 'sonner';
 
 type StepType = 'INGEST' | 'REMOVE_BG' | 'FASHION_STUDIO' | 'VIDEO_GEN' | 'UPSCALE' | 'EXPORT';

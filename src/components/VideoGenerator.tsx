@@ -4,7 +4,7 @@ import { geminiService } from '../services/gemini';
 import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable } from '../services/flowService';
 import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Plus, Globe, X } from 'lucide-react';
 import { fileToBase64, resizeImage } from '../utils/image';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 

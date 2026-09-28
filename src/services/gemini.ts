@@ -25,7 +25,7 @@ export const MODEL_OPTIONS = [
   { id: 'imagen-4.0-generate-001', name: 'Imagen 4 (API)', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
 ];
 
-import { GeminiService as CoreGeminiService } from '../server/gemini';
+import { GeminiService as CoreGeminiService } from '../../server/gemini';
 
 export class GeminiService {
   private async rpc(method: string, args: any[]) {
@@ -79,6 +79,10 @@ export class GeminiService {
 
   async analyzeFashionImage(imageBase64: string): Promise<string> {
     return this.rpc('analyzeFashionImage', [imageBase64]);
+  }
+
+  async reviewImage(imageBase64: string): Promise<{ pass: boolean, reason?: string }> {
+    return this.rpc('reviewImage', [imageBase64]);
   }
 
   async refineImage(originalImageBase64: string, maskImageBase64: string, prompt: string, config: any): Promise<string | undefined> {

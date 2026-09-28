@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppMode } from '../types';
 import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, CheckCircle2, Loader2, RefreshCw, Box, ArrowRight, History, HelpCircle, Grid } from 'lucide-react';
-import { useProject } from '../src/context/ProjectContext';
+import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';

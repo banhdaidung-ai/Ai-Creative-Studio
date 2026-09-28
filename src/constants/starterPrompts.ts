@@ -1,4 +1,4 @@
-import { PromptTemplate } from '../../types';
+import { PromptTemplate } from '../types';
 
 export const STARTER_PROMPTS: PromptTemplate[] = [
   // STUDIO CATEGORY

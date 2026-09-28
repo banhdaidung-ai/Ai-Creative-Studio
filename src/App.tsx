@@ -15,7 +15,7 @@ import PromptLibrary from './components/PromptLibrary';
 import WorkflowStudio from './components/WorkflowStudio';
 import LoginGate from './components/LoginGate';
 import { AppMode } from './types';
-import { ProjectProvider } from './src/context/ProjectContext';
+import { ProjectProvider } from './contexts/ProjectContext';
 import { Toaster } from 'sonner';
 
 const App: React.FC = () => {

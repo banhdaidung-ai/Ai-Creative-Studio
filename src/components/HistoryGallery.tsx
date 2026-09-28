@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useProject, ImageAsset } from '../src/context/ProjectContext';
+import { useProject, ImageAsset } from '../contexts/ProjectContext';
 import { Trash2, Download, Box, Search, Filter, Calendar, Clock, Image as ImageIcon, X, CheckCircle2, Share2, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 

@@ -369,6 +369,35 @@ export class GeminiService {
     throw new Error(this.getFriendlyErrorMessage(lastError), { cause: lastError });
   }
 
+  async reviewImage(imageBase64: string): Promise<{ pass: boolean, reason?: string }> {
+    const prompt = `You are a strict Quality Control expert for AI-generated fashion images.
+Inspect this generated image for major anatomical deformities (extra fingers, missing limbs, severely distorted faces) or severe rendering glitches (floating clothing, disconnected body parts).
+If the image looks reasonably natural and anatomically correct, respond EXACTLY with 'PASS'.
+If there is a severe deformity or glitch, respond with 'FAIL: [Brief reason in Vietnamese, max 10 words]'.
+Be lenient on minor details, but strict on horror-like deformities.`;
+    
+    try {
+        const response = await this.callModel({
+            model: 'gemini-3-flash-preview',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: 'image/png', data: imageBase64 } },
+                    { text: prompt }
+                ]
+            },
+            config: { temperature: 0.1 }
+        });
+        const text = response.text?.trim() || "";
+        if (text.startsWith('FAIL')) {
+            return { pass: false, reason: text.replace('FAIL:', '').replace('FAIL', '').trim() || 'Lỗi dị dạng' };
+        }
+        return { pass: true };
+    } catch (e: any) {
+        console.error("Auto-review failed", e);
+        return { pass: true }; // Fallback to pass if review fails
+    }
+  }
+
   async refineImage(
     originalImageBase64: string,
     maskImageBase64: string,

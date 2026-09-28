@@ -1,4 +1,16 @@
 {
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "venv",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
+    }
+  ],
   "hosting": {
     "public": "dist",
     "ignore": [
@@ -10,6 +22,10 @@
       "*.map"
     ],
     "rewrites": [
+      {
+        "source": "/api/flow/**",
+        "function": "flow_api"
+      },
       {
         "source": "**",
         "destination": "/index.html"

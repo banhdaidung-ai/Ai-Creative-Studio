@@ -168,6 +168,7 @@ const VideoGenerator: React.FC = () => {
         } else {
           setError("Không nhận được kết quả từ server.");
         }
+      }
     } catch (err: any) {
       setError(err.message || "Lỗi khi tạo video.");
     } finally {

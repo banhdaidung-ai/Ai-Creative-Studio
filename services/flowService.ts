@@ -189,19 +189,44 @@ export async function generateImageViaFlow(
   options: FlowGenerateImageOptions,
   onProgress?: (progress: number, message: string) => void,
 ): Promise<string | undefined> {
-  const jobId = await submitFlowImageJob(options);
-  const result = await pollFlowJob(jobId, onProgress);
-
-  if (result.status === 'failed') {
-    throw new Error(result.error || 'Google Flow thất bại khi tạo ảnh.');
+  if (onProgress) {
+    onProgress(10, 'Đang gửi yêu cầu tạo ảnh đến server...');
   }
+  
+  const payload = {
+    prompt: options.prompt,
+    style: 'Realistic',
+    reference_images: options.referenceImageBase64 ? [options.referenceImageBase64] : []
+  };
 
-  const images = result.images || result.result?.images;
-  if (images && images.length > 0) {
-    return images[0].url;
+  try {
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key')?.trim() : '';
+    const res = await fetch(getFlowApiUrl('/flow/generate'), {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(apiKey ? { 'x-api-key': apiKey } : {})
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await parseJsonResponse<any>(res, 'Tạo ảnh qua Google Flow Proxy');
+    if (onProgress) {
+      onProgress(100, 'Tạo ảnh thành công!');
+    }
+    
+    if (data.image_url) {
+      return data.image_url;
+    }
+    
+    if (data.success && data.images && data.images.length > 0) {
+      return data.images[0].url;
+    }
+    
+    throw new Error('Server không trả về URL ảnh hợp lệ.');
+  } catch (err: any) {
+    throw new Error(err.message || 'Google Flow thất bại khi tạo ảnh.');
   }
-
-  return undefined;
 }
 
 // ── Video Generation ──────────────────────────────────────────────────────────
@@ -234,14 +259,45 @@ export async function generateVideoViaFlow(
   options: FlowGenerateVideoOptions,
   onProgress?: (progress: number, message: string) => void,
 ): Promise<string | undefined> {
-  const jobId = await submitFlowVideoJob(options);
-  const result = await pollFlowJob(jobId, onProgress, 3000, 400000);
-
-  if (result.status === 'failed') {
-    throw new Error(result.error || 'Google Flow thất bại khi tạo video.');
+  if (onProgress) {
+    onProgress(10, 'Đang gửi yêu cầu tạo video đến server...');
   }
 
-  return result.video_url || result.result?.video_url;
+  const payload = {
+    prompt: options.prompt,
+    style: 'Video',
+    reference_images: options.referenceImageBase64 ? [options.referenceImageBase64] : []
+  };
+
+  try {
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key')?.trim() : '';
+    const res = await fetch(getFlowApiUrl('/flow/generate'), {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(apiKey ? { 'x-api-key': apiKey } : {})
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await parseJsonResponse<any>(res, 'Tạo video qua Google Flow Proxy');
+    if (onProgress) {
+      onProgress(100, 'Tạo video thành công!');
+    }
+    
+    // In our new spec, the backend uses `image_url` placeholder, but for videos it might return video_url
+    if (data.video_url) {
+      return data.video_url;
+    }
+
+    if (data.image_url) {
+      return data.image_url;
+    }
+    
+    throw new Error('Server không trả về URL video hợp lệ.');
+  } catch (err: any) {
+    throw new Error(err.message || 'Google Flow thất bại khi tạo video.');
+  }
 }
 
 // ── Prompt Enhancement ────────────────────────────────────────────────────────

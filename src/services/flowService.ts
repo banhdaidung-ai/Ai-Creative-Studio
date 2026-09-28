@@ -193,39 +193,25 @@ export async function generateImageViaFlow(
     onProgress(10, 'Đang gửi yêu cầu tạo ảnh đến server...');
   }
   
-  const payload = {
-    prompt: options.prompt,
-    style: 'Realistic',
-    reference_images: options.referenceImageBase64 ? [options.referenceImageBase64] : []
-  };
-
   try {
-    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key')?.trim() : '';
-    const res = await fetch(getFlowApiUrl('/flow/generate'), {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...(apiKey ? { 'x-api-key': apiKey } : {})
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await parseJsonResponse<any>(res, 'Tạo ảnh qua Google Flow Proxy');
-    if (onProgress) {
-      onProgress(100, 'Tạo ảnh thành công!');
+    const jobId = await submitFlowImageJob(options);
+    
+    const status = await pollFlowJob(jobId, onProgress);
+    
+    if (status.status === 'completed' && status.result) {
+      if (status.result.images && status.result.images.length > 0) {
+        return status.result.images[0].url;
+      }
+      if (status.image_url) return status.image_url;
     }
     
-    if (data.image_url) {
-      return data.image_url;
-    }
-    
-    if (data.success && data.images && data.images.length > 0) {
-      return data.images[0].url;
-    }
-    
-    throw new Error('Server không trả về URL ảnh hợp lệ.');
+    throw new Error(status.error || 'Server không trả về URL ảnh hợp lệ.');
   } catch (err: any) {
-    console.warn("Backend proxy fail", err);
+    console.warn("Backend flow fail", err);
+    const msg = err.message || '';
+    if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
+      throw err;
+    }
     throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa kết nối hoặc chưa chạy ở máy local. Hãy chạy "npm run dev:flow" hoặc chuyển sang mô hình Gemini API.');
   }
 }
@@ -264,45 +250,25 @@ export async function generateVideoViaFlow(
     onProgress(10, 'Đang gửi yêu cầu tạo video đến server...');
   }
 
-  const payload = {
-    prompt: options.prompt,
-    style: 'Video',
-    reference_images: options.referenceImageBase64 ? [options.referenceImageBase64] : []
-  };
-
   try {
-    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key')?.trim() : '';
-    const res = await fetch(getFlowApiUrl('/flow/generate'), {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...(apiKey ? { 'x-api-key': apiKey } : {})
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await parseJsonResponse<any>(res, 'Tạo video qua Google Flow Proxy');
-    if (onProgress) {
-      onProgress(100, 'Tạo video thành công!');
+    const jobId = await submitFlowVideoJob(options);
+    
+    const status = await pollFlowJob(jobId, onProgress);
+    
+    if (status.status === 'completed' && status.result) {
+      if (status.result.video_url) return status.result.video_url;
+      if (status.video_url) return status.video_url;
+      if (status.image_url) return status.image_url;
     }
     
-    // In our new spec, the backend uses `image_url` placeholder, but for videos it might return video_url
-    if (data.video_url) {
-      return data.video_url;
-    }
-
-    if (data.image_url) {
-      return data.image_url;
-    }
-    
-    throw new Error('Server không trả về URL video hợp lệ.');
+    throw new Error(status.error || 'Server không trả về URL video hợp lệ.');
   } catch (err: any) {
-    console.warn("Backend proxy fail, fallback to mock generation", err);
-    // FALLBACK: Khi không có Cloud Run proxy, giả lập kết quả trả về như backend
-    if (onProgress) {
-      onProgress(100, 'Tạo video thành công (Mock Serverless)!');
+    console.warn("Backend flow fail", err);
+    const msg = err.message || '';
+    if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
+      throw err;
     }
-    return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa kết nối hoặc chưa chạy ở máy local. Hãy chạy "npm run dev:flow" hoặc chuyển sang mô hình Gemini API.');
   }
 }
 

@@ -1056,13 +1056,18 @@ const ImageEditor: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    toast.info('Để dùng Google Flow trên máy local, mở Terminal và chạy lệnh:\nnpm run dev:flow', {
-                                      duration: 8000,
-                                    });
+                                    toast.promise(
+                                      fetch('/api/start-flow-backend', { method: 'POST' }).then(res => res.json()),
+                                      {
+                                        loading: 'Đang khởi động Local Backend...',
+                                        success: (data) => data.message || 'Đã khởi động Local Backend!',
+                                        error: 'Không thể khởi động Local Backend'
+                                      }
+                                    );
                                   }}
                                   className="px-3 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-slate-700 dark:text-white rounded-xl text-[11px] font-medium transition-all border border-slate-200 dark:border-white/10"
                                 >
-                                  💻 Cách bật Local Backend
+                                  💻 Bật Local Backend
                                 </button>
                               )}
                             </div>

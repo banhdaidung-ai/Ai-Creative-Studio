@@ -4,6 +4,7 @@ import path from 'path';
 import net from 'net';
 import http from 'http';
 import https from 'https';
+import { spawn } from 'child_process';
 import { GeminiService } from './server/gemini.js';
 
 // Auto-load environment variables if .env or .env.local exists
@@ -139,6 +140,27 @@ async function startServer() {
       }
     } catch (error: any) {
       console.error('[GeminiService API Error]', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ── Start Local Backend endpoint ──────────────────────────────────────────
+  app.post('/api/start-flow-backend', async (req, res) => {
+    try {
+      const isAvailable = await checkPortAvailable(8000);
+      if (!isAvailable) {
+        return res.json({ success: true, message: 'Backend đã đang chạy trên port 8000!' });
+      }
+      
+      console.log('[Flow Backend] Bắt đầu khởi động backend...');
+      const backendProc = spawn('bash', ['-c', 'cd flow-backend && source .venv/bin/activate && uvicorn app:app --port 8000 --host 0.0.0.0'], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      backendProc.unref();
+      
+      res.json({ success: true, message: 'Đã gửi lệnh khởi động Local Backend thành công!' });
+    } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
     }
   });

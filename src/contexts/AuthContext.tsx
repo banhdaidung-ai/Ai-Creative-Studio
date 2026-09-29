@@ -20,6 +20,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInAsGuest: () => void;
   logout: () => Promise<void>;
   getIdToken: () => Promise<string | null>;
 }
@@ -29,22 +30,49 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   signInWithGoogle: async () => {},
+  signInAsGuest: () => {},
   logout: async () => {},
   getIdToken: async () => null,
 });
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const isGuest = localStorage.getItem('guest_mode') === 'true';
+    if (isGuest) {
+      return {
+        uid: 'guest-demo-user',
+        email: 'guest@yody.io',
+        displayName: 'Khách trải nghiệm',
+        photoURL: '',
+        getIdToken: async () => 'demo-token',
+      } as unknown as User;
+    }
+    return null;
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
       if (firebaseUser) {
+        setUser(firebaseUser);
+        localStorage.removeItem('guest_mode');
         localStorage.setItem('google_account_pro', 'true');
         localStorage.setItem('google_account_email', firebaseUser.email || '');
         window.dispatchEvent(new Event('gemini_api_key_updated'));
+      } else {
+        const isGuest = localStorage.getItem('guest_mode') === 'true';
+        if (isGuest) {
+          setUser({
+            uid: 'guest-demo-user',
+            email: 'guest@yody.io',
+            displayName: 'Khách trải nghiệm',
+            photoURL: '',
+            getIdToken: async () => 'demo-token',
+          } as unknown as User);
+        } else {
+          setUser(null);
+        }
       }
       setLoading(false);
     });
@@ -60,8 +88,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const signInAsGuest = useCallback(() => {
+    localStorage.setItem('guest_mode', 'true');
+    setUser({
+      uid: 'guest-demo-user',
+      email: 'guest@yody.io',
+      displayName: 'Khách trải nghiệm',
+      photoURL: '',
+      getIdToken: async () => 'demo-token',
+    } as unknown as User);
+  }, []);
+
   const logout = useCallback(async () => {
-    await signOut(auth);
+    localStorage.removeItem('guest_mode');
+    await signOut(auth).catch(() => {});
     setUser(null);
   }, []);
 
@@ -76,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithGoogle, logout, getIdToken }}>
+    <AuthContext.Provider value={{ user, loading, signInWithGoogle, signInAsGuest, logout, getIdToken }}>
       {children}
     </AuthContext.Provider>
   );

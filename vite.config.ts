@@ -12,14 +12,18 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         proxy: {
           '/api/flow': {
-            target: 'http://localhost:8000',
+            target: 'http://127.0.0.1:8000',
             changeOrigin: true,
             rewrite: (path) => {
-              if (path === '/api/flow/health' || path === '/api/flow/') {
-                return path.replace(/^\/api\/flow/, '');
+              if (path === '/api/flow/health' || path === '/api/flow/' || path === '/api/flow') {
+                return path.replace(/^\/api\/flow/, '') || '/health';
               }
               return path.replace(/^\/api\/flow/, '/api');
             },
+          },
+          '/media': {
+            target: 'http://127.0.0.1:8000',
+            changeOrigin: true,
           },
         },
       },

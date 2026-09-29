@@ -386,6 +386,21 @@ const ImageEditor: React.FC = () => {
           isLocalFlowActive = false;
         }
 
+        // Tự động kích hoạt Local Backend nếu chưa mở
+        if (!isLocalFlowActive) {
+          try {
+            setLoadingMessage("Đang khởi động Google Flow Local Backend...");
+            await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
+            for (let i = 0; i < 7; i++) {
+              await new Promise(r => setTimeout(r, 1000));
+              isLocalFlowActive = await isFlowBackendAvailable();
+              if (isLocalFlowActive) break;
+            }
+          } catch {
+            // Ignore
+          }
+        }
+
         if (isLocalFlowActive) {
           const activeRef = modelImage || (refImages.length > 0 ? refImages[0] : undefined);
           let refMime = 'image/jpeg';
@@ -426,8 +441,21 @@ const ImageEditor: React.FC = () => {
             throw new Error("Google Flow không trả về ảnh.");
           }
         } else {
-          // Flow backend không khả dụng
-          throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online hoặc sử dụng mô hình API thay thế.');
+          // Khi không có backend local (ví dụ chạy trên web online hoặc chưa cài python):
+          // Kiểm tra xem có Gemini API key không để fallback thông minh
+          const fallbackModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-3.1-flash-image';
+          const hasKey = apiKeySelected || !!localStorage.getItem('gemini_api_key') || (typeof window !== 'undefined' && !!(window as any).aistudio);
+          if (hasKey) {
+            toast.info(`⚡ Google Flow Local chưa bật, đang tự động chuyển tiếp sang mô hình ${fallbackModel} để tạo ảnh cho sếp...`);
+            effectiveModelId = fallbackModel;
+            // Chạy tiếp luồng Gemini bên dưới!
+          } else {
+            window.dispatchEvent(new Event('open_unlock_modal'));
+            throw new Error(
+              'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa chạy trên máy. ' +
+              'Vui lòng nhấn nút "💻 Bật Local Backend" bên dưới hoặc cấu hình API Key / Tài khoản Google để tạo ảnh trực tuyến.'
+            );
+          }
         }
       }
 

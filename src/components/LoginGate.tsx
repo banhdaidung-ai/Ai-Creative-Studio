@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function LoginGate({ children }: { children: React.ReactNode }) {
-  const { user, loading, signInWithGoogle } = useAuth();
+  const { user, loading, signInWithGoogle, signInAsGuest } = useAuth();
 
   // ── Loading ────────────────────────────────────────────────────────────────
   if (loading) {
@@ -153,6 +153,43 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
             <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
           </svg>
           Đăng nhập với Google
+        </button>
+
+        {/* Guest / Demo Tryout Button */}
+        <button
+          id="guest-signin-btn"
+          onClick={signInAsGuest}
+          style={{
+            marginTop: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            padding: '10px 20px',
+            borderRadius: '50px',
+            border: '1px dashed rgba(255,255,255,0.2)',
+            background: 'transparent',
+            cursor: 'pointer',
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: '13px',
+            fontWeight: 500,
+            fontFamily: 'inherit',
+            transition: 'all 0.2s ease',
+            width: '100%',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.color = '#fff';
+            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.4)';
+            e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.color = 'rgba(255,255,255,0.7)';
+            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)';
+            e.currentTarget.style.background = 'transparent';
+          }}
+        >
+          <span>🚀</span>
+          <span>Dùng thử nhanh (Chế độ Khách / Demo)</span>
         </button>
 
         {/* Feature list */}

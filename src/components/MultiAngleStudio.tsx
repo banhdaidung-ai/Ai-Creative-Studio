@@ -3,8 +3,8 @@ import { toast } from 'sonner';
 import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
-import { resizeImage, extractRatioFromPrompt } from '../utils/image';
-import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
+import { resizeImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
+import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP } from '../services/flowService';
 import PhotoEditor from './PhotoEditor';
 import { useProject } from '../contexts/ProjectContext';
 import { 
@@ -276,30 +276,52 @@ const MultiAngleStudio: React.FC = () => {
     try {
         let result: string | null | undefined = null;
 
-        if (isFlow && flowReady) {
-            const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
-            const stylePrompt = STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt || '';
-            const customUserPrompt = prompts[angleId] || angleConfig?.userDesc || '';
-            const prompt = `Professional high-end fashion lookbook photoshoot of the identical model wearing the exact same clothes from reference. Camera framing and angle: ${angleConfig?.promptDesc || ''}. Model pose: ${customUserPrompt}. ${stylePrompt}. Maintain 100% consistent model facial identity, body proportions, identical garment fabrics and patterns, studio flash lighting, 8k resolution, crisp photorealistic quality.`;
+        if (isFlow) {
+            try {
+                const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
+                const stylePrompt = STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt || '';
+                const customUserPrompt = prompts[angleId] || angleConfig?.userDesc || '';
+                const prompt = `Professional high-end fashion lookbook photoshoot of the identical model wearing the exact same clothes from reference. Camera framing and angle: ${angleConfig?.promptDesc || ''}. Model pose: ${customUserPrompt}. ${stylePrompt}. Maintain 100% consistent model facial identity, body proportions, identical garment fabrics and patterns, studio flash lighting, 8k resolution, crisp photorealistic quality.`;
 
-            let refImg = modelImage;
-            if ((angleId === 'close' || angleId === 'macro') && faceImage) refImg = faceImage;
-            else if (angleId === 'back' && backImage) refImg = backImage;
+                let refImg = modelImage;
+                if ((angleId === 'close' || angleId === 'macro') && faceImage) refImg = faceImage;
+                else if (angleId === 'back' && backImage) refImg = backImage;
 
-            const flowResult = await generateImageViaFlow({
-                prompt,
-                aspectRatio,
-                numImages: 1,
-                model: selectedModelId,
-                referenceImageBase64: refImg,
-                referenceImageMime: refImg.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
-            });
+                const flowResult = await generateImageViaFlow({
+                    prompt,
+                    aspectRatio,
+                    numImages: 1,
+                    model: selectedModelId,
+                    referenceImageBase64: refImg || undefined,
+                    referenceImageMime: refImg?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+                });
 
-            if (flowResult) {
-                result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
+                if (flowResult) {
+                    result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
+                }
+            } catch (flowErr: any) {
+                const hasKey = apiKeySelected || 
+                               localStorage.getItem('gemini_api_key') || 
+                               localStorage.getItem('google_account_pro') === 'true';
+                if (hasKey) {
+                    const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+                    toast.info(`Google Flow chưa phản hồi, tự động dùng ${fallbackModel} để hoàn tất góc chụp...`);
+                    result = await geminiService.generateSingleAngle(
+                        modelImage, 
+                        angleId, 
+                        [], 
+                        { 
+                            modelId: fallbackModel,
+                            aspectRatio: aspectRatio, 
+                            imageSize: imageSize,
+                        }
+                    );
+                } else {
+                    toast.error('Vui lòng kích hoạt API Key để tạo ảnh trên web.');
+                    window.dispatchEvent(new Event('open_unlock_modal'));
+                    return;
+                }
             }
-        } else if (isFlow && !flowReady) {
-            throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online.');
         } else {
             result = await geminiService.generateSingleAngle(
                 modelImage, 
@@ -323,7 +345,7 @@ const MultiAngleStudio: React.FC = () => {
             
             // Add to global history
             addToHistory({
-              url: `data:image/png;base64,${result}`,
+              url: formatImageSrc(result),
               prompt: prompts[angleId],
               mode: 'MULTI_ANGLE'
             });
@@ -657,7 +679,7 @@ const MultiAngleStudio: React.FC = () => {
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20"><Loader2 className="w-8 h-8 text-yellow-400 animate-spin mb-2" /><span className="text-[8px] font-bold text-yellow-400/60 uppercase tracking-widest">Rendering...</span></div>
                                     ) : results[config.id] ? (
                                         <>
-                                            <img src={`data:image/png;base64,${results[config.id]}`} className="w-full h-full object-cover" />
+                                            <img src={formatImageSrc(results[config.id])} className="w-full h-full object-cover" />
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-1.5 md:gap-2">
                                                     <button onClick={() => setPreviewImage(results[config.id])} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Phóng to"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>
@@ -665,7 +687,7 @@ const MultiAngleStudio: React.FC = () => {
                                                         onClick={(e) => { 
                                                             e.stopPropagation(); 
                                                             addToWorkspace({
-                                                                url: `data:image/png;base64,${results[config.id]}`,
+                                                                url: formatImageSrc(results[config.id]),
                                                                 prompt: prompts[config.id],
                                                                 mode: 'MULTI_ANGLE'
                                                             });
@@ -680,7 +702,7 @@ const MultiAngleStudio: React.FC = () => {
                                                     <button 
                                                         onClick={() => {
                                                             const link = document.createElement('a');
-                                                            link.href = `data:image/png;base64,${results[config.id]}`;
+                                                            link.href = formatImageSrc(results[config.id]);
                                                             link.download = `yody-angle-${config.id}-${Date.now()}.png`;
                                                             link.click();
                                                         }} 
@@ -742,7 +764,7 @@ const MultiAngleStudio: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}>
             <button className="absolute top-4 right-4 z-[110] text-white/60 hover:text-white bg-white/10 p-2 rounded-2xl"><X className="w-6 h-6" /></button>
             <div className="relative flex items-center justify-center w-full h-full" onClick={(e) => e.stopPropagation()} onWheel={handleWheel} onMouseDown={startDrag} onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag}>
-                <img src={`data:image/png;base64,${previewImage}`} className="max-w-full max-h-[85vh] object-contain rounded-[1rem] shadow-2xl transition-transform duration-100 ease-out select-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? (isDraggingPreview ? 'grabbing' : 'grab') : 'zoom-in' }} draggable={false} />
+                <img src={formatImageSrc(previewImage)} className="max-w-full max-h-[85vh] object-contain rounded-[1rem] shadow-2xl transition-transform duration-100 ease-out select-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? (isDraggingPreview ? 'grabbing' : 'grab') : 'zoom-in' }} draggable={false} />
             </div>
         </div>
       )}

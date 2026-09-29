@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { geminiService, MODEL_OPTIONS } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
-import { resizeImage } from '../utils/image';
-import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS } from '../services/flowService';
+import { resizeImage, formatImageSrc } from '../utils/image';
+import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP } from '../services/flowService';
 import MaskDrawEditor from './MaskDrawEditor';
 import AspectRatioSelector from './AspectRatioSelector';
 import { 
@@ -180,21 +180,38 @@ const VirtualTryOn: React.FC = () => {
     try {
       let result: string | null | undefined = null;
 
-      if (isFlow && flowReady) {
-        toast.info('Đang thực hiện ướm đồ qua Google Flow...');
-        const flowResult = await generateImageViaFlow({
-          prompt,
-          aspectRatio,
-          numImages: 1,
-          model: selectedModelId,
-          referenceImageBase64: modelImage,
-          referenceImageMime: modelImage.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
-        });
-        if (flowResult) {
-          result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
+      if (isFlow) {
+        try {
+          toast.info('Đang thực hiện ướm đồ qua Google Flow...');
+          const flowResult = await generateImageViaFlow({
+            prompt,
+            aspectRatio,
+            numImages: 1,
+            model: selectedModelId,
+            referenceImageBase64: modelImage || undefined,
+            referenceImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+          });
+          if (flowResult) {
+            result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
+          }
+        } catch (flowErr: any) {
+          const hasKey = apiKeySelected || 
+                         localStorage.getItem('gemini_api_key') || 
+                         localStorage.getItem('google_account_pro') === 'true';
+          if (hasKey) {
+            const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+            toast.info(`Google Flow chưa phản hồi, tự động dùng ${fallbackModel} để hoàn tất ướm đồ...`);
+            result = await geminiService.editImage(modelImage, prompt, refs, {
+              modelId: fallbackModel,
+              aspectRatio,
+              imageSize
+            });
+          } else {
+            toast.error('Vui lòng kích hoạt API Key để ướm thử trên web.');
+            window.dispatchEvent(new Event('open_unlock_modal'));
+            return;
+          }
         }
-      } else if (isFlow && !flowReady) {
-        throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online.');
       } else {
         result = await geminiService.editImage(modelImage, prompt, refs, {
           modelId: selectedModelId,
@@ -234,7 +251,7 @@ const VirtualTryOn: React.FC = () => {
         >
             {image ? (
                 <>
-                    <img src={`data:image/png;base64,${image}`} className="w-full h-full object-contain p-2" />
+                    <img src={formatImageSrc(image)} className="w-full h-full object-contain p-2" />
                     <button 
                         onClick={(e) => { e.stopPropagation(); onClear(); }}
                         className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
@@ -327,7 +344,7 @@ const VirtualTryOn: React.FC = () => {
                                             });
                                             setAspectRatio(closestRatio);
                                         };
-                                        img.src = `data:image/png;base64,${modelImage}`;
+                                        img.src = formatImageSrc(modelImage);
                                     }
                                 }}
                             />
@@ -426,9 +443,9 @@ const VirtualTryOn: React.FC = () => {
                                 onMouseMove={handleSliderMove}
                                 onTouchMove={handleSliderMove}
                             >
-                                <img src={`data:image/png;base64,${resultImage}`} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                                <img src={formatImageSrc(resultImage)} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                                 <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
-                                    <img src={`data:image/png;base64,${modelImage}`} className="absolute inset-0 w-full h-full object-contain" />
+                                    <img src={formatImageSrc(modelImage)} className="absolute inset-0 w-full h-full object-contain" />
                                 </div>
                                 <div className="absolute inset-y-0 w-1 bg-white/80 shadow-[0_0_15px_rgba(255,255,255,0.8)] z-20 pointer-events-none" style={{ left: `${sliderPosition}%` }}>
                                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white/90 backdrop-blur-2xl rounded-full flex items-center justify-center shadow-2xl border-2 border-indigo-900">
@@ -438,7 +455,7 @@ const VirtualTryOn: React.FC = () => {
                             </div>
                         ) : (
                             <img 
-                                src={`data:image/png;base64,${resultImage}`} 
+                                src={formatImageSrc(resultImage)} 
                                 className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-white/10" 
                             />
                         )}
@@ -454,7 +471,7 @@ const VirtualTryOn: React.FC = () => {
                                 </button>
                             )}
                             <a 
-                                href={`data:image/png;base64,${resultImage}`} 
+                                href={formatImageSrc(resultImage)} 
                                 download={`yody-tryon-${Date.now()}.png`}
                                 className="px-6 py-2 bg-indigo-600 rounded-xl text-white font-black text-[9px] uppercase tracking-widest shadow-lg hover:bg-indigo-500 flex items-center gap-2"
                             >

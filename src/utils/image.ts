@@ -7,24 +7,49 @@
 export const formatImageSrc = (img?: string | null): string => {
   if (!img) return '';
   const trimmed = img.trim();
-  if (
-    trimmed.startsWith('data:') || 
-    trimmed.startsWith('http://') || 
-    trimmed.startsWith('https://') || 
-    trimmed.startsWith('/') || 
-    trimmed.startsWith('blob:')
-  ) {
+
+  // 1. Already a data URI or blob URL
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
     return trimmed;
   }
-  // JPEG base64 signature
+
+  // 2. HTTP or HTTPS URL
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  
+  // 3. Check common base64 image signatures FIRST before generic slash check
+  // JPEG base64 signature (/9j/)
   if (trimmed.startsWith('/9j/')) {
     return `data:image/jpeg;base64,${trimmed}`;
+  }
+  // PNG base64 signature
+  if (trimmed.startsWith('iVBORw0KGgo')) {
+    return `data:image/png;base64,${trimmed}`;
   }
   // WebP base64 signature (RIFF/WEBP)
   if (trimmed.startsWith('UklGR')) {
     return `data:image/webp;base64,${trimmed}`;
   }
-  // Default to PNG base64
+  // GIF base64 signature
+  if (trimmed.startsWith('R0lGOD')) {
+    return `data:image/gif;base64,${trimmed}`;
+  }
+  // AVIF or HEIC base64 signature
+  if (trimmed.startsWith('AAAA')) {
+    return `data:image/avif;base64,${trimmed}`;
+  }
+  // SVG base64 signature
+  if (trimmed.startsWith('PHN2Zw')) {
+    return `data:image/svg+xml;base64,${trimmed}`;
+  }
+
+  // 4. Only genuine relative URL paths (e.g., /assets/logo.png, /vite.svg) and NOT a long base64 string
+  if (trimmed.startsWith('/') && trimmed.length < 500 && !trimmed.includes('\n')) {
+    return trimmed;
+  }
+  
+  // 5. If we can't identify it, default to png (most common API output)
   return `data:image/png;base64,${trimmed}`;
 };
 

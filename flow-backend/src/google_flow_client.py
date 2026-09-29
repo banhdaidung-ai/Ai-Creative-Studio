@@ -30,6 +30,11 @@ from playwright.async_api import (
     async_playwright,
 )
 
+import sys
+_client_dir = str(Path(__file__).parent)
+if _client_dir not in sys.path:
+    sys.path.insert(0, _client_dir)
+
 from session_manager import load_cookies, save_cookies, has_valid_session
 from watermark_remover import remove_gemini_watermark
 
@@ -1038,7 +1043,7 @@ async def _wait_for_new_images(
                         b64 = base64.b64encode(cropped_body).decode("utf-8")
                         results.append({
                             "url": f"data:image/png;base64,{b64}",
-                            "download_url": f"http://localhost:8000/media/{img_filename}",
+                            "download_url": f"/media/{img_filename}",
                             "width": final_w,
                             "height": final_h,
                             "mime_type": "image/png",

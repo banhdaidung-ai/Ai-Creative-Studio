@@ -57,15 +57,60 @@ export interface FlowGenerateVideoOptions {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function base64ToFile(base64: string, mime: string, filename: string): File {
-  const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
-  const byteString = atob(cleanBase64);
-  const ab = new ArrayBuffer(byteString.length);
-  const ia = new Uint8Array(ab);
-  for (let i = 0; i < byteString.length; i++) {
-    ia[i] = byteString.charCodeAt(i);
+/**
+ * Chuyển đổi an toàn từ data URI, base64 thô hoặc URL sang đối tượng File.
+ * Không bị crash khi gặp chuỗi có chứa ký tự đặc biệt, URL ảnh mẫu hoặc định dạng khác.
+ */
+async function safeImageToFile(imageInput: string, mime = 'image/jpeg', filename = 'reference.jpg'): Promise<File> {
+  const trimmed = imageInput.trim();
+
+  // 1. Nếu là URL (http, https, blob hoặc relative path web)
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('blob:') ||
+    (trimmed.startsWith('/') && !trimmed.startsWith('/9j/'))
+  ) {
+    try {
+      const res = await fetch(trimmed);
+      const blob = await res.blob();
+      return new File([blob], filename, { type: blob.type || mime });
+    } catch (e) {
+      console.warn('Cannot fetch image URL, attempting fallback:', e);
+    }
   }
-  return new File([ab], filename, { type: mime });
+
+  // 2. Tách MIME và data từ prefix data: nếu có
+  let detectedMime = mime;
+  let rawBase64 = trimmed;
+  if (trimmed.startsWith('data:')) {
+    const match = trimmed.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      detectedMime = match[1];
+      rawBase64 = match[2];
+    } else {
+      rawBase64 = trimmed.split(',')[1] || '';
+    }
+  }
+
+  // 3. Chuẩn hóa chuỗi base64 (loại bỏ khoảng trắng, xuống dòng)
+  rawBase64 = rawBase64.replace(/\s+/g, '');
+  while (rawBase64.length % 4 !== 0) {
+    rawBase64 += '=';
+  }
+
+  try {
+    const byteString = atob(rawBase64);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new File([ab], filename, { type: detectedMime });
+  } catch (err) {
+    console.warn('safeImageToFile conversion fallback:', err);
+    return new File([], filename, { type: detectedMime });
+  }
 }
 
 export function getFlowApiUrl(endpoint: string): string {
@@ -84,6 +129,39 @@ export function getFlowApiUrl(endpoint: string): string {
   }
 
   return `${FLOW_PROXY_BASE}${cleanEndpoint}`;
+}
+
+/**
+ * Tự động kiểm tra và khởi động Google Flow Local Backend nếu chưa chạy.
+ */
+export async function ensureFlowBackendReady(
+  onProgress?: (progress: number, message: string) => void
+): Promise<boolean> {
+  let isReady = await isFlowBackendAvailable();
+  if (isReady) return true;
+
+  if (typeof window !== 'undefined') {
+    try {
+      if (onProgress) {
+        onProgress(8, 'Đang tự động khởi động Google Flow Backend...');
+      }
+      await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
+
+      // Chờ tối đa 8 giây để backend khởi động xong
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        isReady = await isFlowBackendAvailable();
+        if (isReady) {
+          if (onProgress) onProgress(12, 'Google Flow Backend đã sẵn sàng!');
+          return true;
+        }
+      }
+    } catch {
+      // Ignored
+    }
+  }
+
+  return isReady;
 }
 
 /**
@@ -172,8 +250,10 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
 
   if (options.referenceImageBase64) {
     const mime = options.referenceImageMime || 'image/jpeg';
-    const file = base64ToFile(options.referenceImageBase64, mime, 'reference.jpg');
-    formData.append('reference_image', file);
+    const file = await safeImageToFile(options.referenceImageBase64, mime, 'reference.jpg');
+    if (file && file.size > 0) {
+      formData.append('reference_image', file);
+    }
   }
 
   const res = await fetch(getFlowApiUrl('/generate-image'), {
@@ -190,29 +270,46 @@ export async function generateImageViaFlow(
   onProgress?: (progress: number, message: string) => void,
 ): Promise<string | undefined> {
   if (onProgress) {
-    onProgress(10, 'Đang gửi yêu cầu tạo ảnh đến server...');
+    onProgress(5, 'Đang chuẩn bị kết nối Google Flow...');
   }
-  
+
+  // Tự động kiểm tra và bật backend nếu chưa sẵn sàng
+  const ready = await ensureFlowBackendReady(onProgress);
+  if (!ready) {
+    throw new Error(
+      'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên máy. ' +
+      'Vui lòng chạy backend ở máy local: `npm run dev:flow` ' +
+      'hoặc chuyển sang mô hình Gemini API (trong mục AI Model Engine).'
+    );
+  }
+
+  if (onProgress) {
+    onProgress(15, 'Đang gửi yêu cầu tạo ảnh đến server...');
+  }
+
   try {
     const jobId = await submitFlowImageJob(options);
-    
+
     const status = await pollFlowJob(jobId, onProgress);
-    
-    if (status.status === 'completed' && status.result) {
-      if (status.result.images && status.result.images.length > 0) {
+
+    if (status.status === 'completed') {
+      if (status.result?.images && status.result.images.length > 0) {
         return status.result.images[0].url;
+      }
+      if (status.images && status.images.length > 0) {
+        return status.images[0].url;
       }
       if (status.image_url) return status.image_url;
     }
-    
+
     throw new Error(status.error || 'Server không trả về URL ảnh hợp lệ.');
   } catch (err: any) {
-    console.warn("Backend flow fail", err);
+    console.warn('Backend flow fail', err);
     const msg = err.message || '';
     if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
       throw err;
     }
-    throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa kết nối hoặc chưa chạy ở máy local. Hãy chạy "npm run dev:flow" hoặc chuyển sang mô hình Gemini API.');
+    throw new Error(err.message || 'Lỗi khi tạo ảnh qua Google Flow.', { cause: err });
   }
 }
 
@@ -229,8 +326,10 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
 
   if (options.referenceImageBase64) {
     const mime = options.referenceImageMime || 'image/jpeg';
-    const file = base64ToFile(options.referenceImageBase64, mime, 'reference.jpg');
-    formData.append('reference_image', file);
+    const file = await safeImageToFile(options.referenceImageBase64, mime, 'reference.jpg');
+    if (file && file.size > 0) {
+      formData.append('reference_image', file);
+    }
   }
 
   const res = await fetch(getFlowApiUrl('/generate-video'), {
@@ -247,28 +346,41 @@ export async function generateVideoViaFlow(
   onProgress?: (progress: number, message: string) => void,
 ): Promise<string | undefined> {
   if (onProgress) {
-    onProgress(10, 'Đang gửi yêu cầu tạo video đến server...');
+    onProgress(5, 'Đang chuẩn bị kết nối Google Flow...');
+  }
+
+  const ready = await ensureFlowBackendReady(onProgress);
+  if (!ready) {
+    throw new Error(
+      'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên máy. ' +
+      'Vui lòng chạy backend ở máy local: `npm run dev:flow` ' +
+      'hoặc chuyển sang mô hình Gemini API.'
+    );
+  }
+
+  if (onProgress) {
+    onProgress(15, 'Đang gửi yêu cầu tạo video đến server...');
   }
 
   try {
     const jobId = await submitFlowVideoJob(options);
-    
+
     const status = await pollFlowJob(jobId, onProgress);
-    
-    if (status.status === 'completed' && status.result) {
-      if (status.result.video_url) return status.result.video_url;
+
+    if (status.status === 'completed') {
+      if (status.result?.video_url) return status.result.video_url;
       if (status.video_url) return status.video_url;
       if (status.image_url) return status.image_url;
     }
-    
+
     throw new Error(status.error || 'Server không trả về URL video hợp lệ.');
   } catch (err: any) {
-    console.warn("Backend flow fail", err);
+    console.warn('Backend flow fail', err);
     const msg = err.message || '';
     if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
       throw err;
     }
-    throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa kết nối hoặc chưa chạy ở máy local. Hãy chạy "npm run dev:flow" hoặc chuyển sang mô hình Gemini API.');
+    throw new Error(err.message || 'Lỗi khi tạo video qua Google Flow.', { cause: err });
   }
 }
 

@@ -112,6 +112,20 @@ const VideoGenerator: React.FC = () => {
           isLocalFlowActive = false;
         }
 
+        if (!isLocalFlowActive) {
+          try {
+            setStatus("Đang khởi động Google Flow Local Backend...");
+            await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
+            for (let i = 0; i < 7; i++) {
+              await new Promise(r => setTimeout(r, 1000));
+              isLocalFlowActive = await isFlowBackendAvailable();
+              if (isLocalFlowActive) break;
+            }
+          } catch {
+            // Ignore
+          }
+        }
+
         if (isLocalFlowActive) {
           // ── Google Flow (Veo / Omni) path ──────────────────────────────
           setStatus(`Đang kết nối Google Flow (${flowVideoModel})...`);
@@ -137,10 +151,17 @@ const VideoGenerator: React.FC = () => {
             return;
           }
         } else {
-          // Flow backend is not available locally -> THROW ERROR
-          throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng cấu hình URL (VITE_FLOW_BACKEND_URL) để sử dụng online.');
+          // Khi không có backend local, nếu có Gemini key thì fallback sang Veo Cloud
+          const hasKey = apiKeySelected || !!localStorage.getItem('gemini_api_key') || (typeof window !== 'undefined' && !!(window as any).aistudio);
+          if (hasKey) {
+            toast.info('⚡ Google Flow Backend chưa bật, đang tự động chuyển sang mô hình Google Veo Cloud...');
+            // Cho phép chạy tiếp nhánh Gemini Veo bên dưới
+          } else {
+            window.dispatchEvent(new Event('open_unlock_modal'));
+            throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng nhấn "Bật Local Backend" hoặc cấu hình API Key / Tài khoản Google để dùng Google Veo Cloud.');
+          }
         }
-      } else {
+      }
 
       // ── Gemini Veo path ────────────────────────────────────────────
       setStatus('Đang khởi tạo phiên làm việc với Google Veo Cloud...');
@@ -168,7 +189,6 @@ const VideoGenerator: React.FC = () => {
         } else {
           setError("Không nhận được kết quả từ server.");
         }
-      }
     } catch (err: any) {
       setError(err.message || "Lỗi khi tạo video.");
     } finally {

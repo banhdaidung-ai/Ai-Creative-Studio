@@ -118,11 +118,17 @@ export function getFlowApiUrl(endpoint: string): string {
   const envUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FLOW_BACKEND_URL ? import.meta.env.VITE_FLOW_BACKEND_URL : undefined;
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
-  const targetBase = customUrl || envUrl;
+  let targetBase = customUrl || envUrl;
+
+  // Khi chạy trên web live đã deploy (Firebase Hosting / non-localhost) và chưa cấu hình URL tùy biến:
+  // Mặc định kết nối trực tiếp đến backend máy người dùng tại http://127.0.0.1:8000
+  if (!targetBase && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    targetBase = 'http://127.0.0.1:8000';
+  }
 
   if (targetBase) {
     const base = targetBase.replace(/\/+$/, '');
-    if (cleanEndpoint === '/health') {
+    if (cleanEndpoint === '/health' || cleanEndpoint === '/api/health') {
       return `${base}/health`;
     }
     return `${base}/api${cleanEndpoint.replace(/^\/api/, '')}`;

@@ -35,7 +35,34 @@ def save_cookies(cookies: list[dict]) -> None:
 
 
 def load_cookies() -> Optional[list[dict]]:
-    """Đọc cookies từ file. Trả về None nếu chưa có session."""
+    """Đọc cookies từ biến môi trường hoặc file JSON. Trả về None nếu chưa có session."""
+    # 1. Thử đọc từ biến môi trường GOOGLE_FLOW_SESSION_JSON hoặc GOOGLE_FLOW_SESSION_B64 (Cloud Run / Docker)
+    env_session = os.getenv("GOOGLE_FLOW_SESSION_JSON") or os.getenv("GOOGLE_FLOW_SESSION_B64")
+    if env_session:
+        try:
+            trimmed = env_session.strip()
+            if trimmed.startswith("{"):
+                data = json.loads(trimmed)
+            else:
+                import base64
+                decoded = base64.b64decode(trimmed).decode("utf-8")
+                data = json.loads(decoded)
+            cookies = data.get("cookies", [])
+            if cookies:
+                logger.info(f"📂 Đã tải {len(cookies)} cookies từ biến môi trường GOOGLE_FLOW_SESSION")
+                # Lưu ra file để tái sử dụng nếu cần
+                try:
+                    ensure_session_dir()
+                    if not SESSION_FILE.exists():
+                        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+                            json.dump({"cookies": cookies}, f, indent=2)
+                except Exception:
+                    pass
+                return cookies
+        except Exception as e:
+            logger.warning(f"Lỗi đọc session từ biến môi trường: {e}")
+
+    # 2. Đọc từ file disk
     if not SESSION_FILE.exists():
         return None
     try:
@@ -59,4 +86,6 @@ def clear_cookies() -> None:
 
 def has_valid_session() -> bool:
     """Kiểm tra xem có session đã lưu không."""
+    if os.getenv("GOOGLE_FLOW_SESSION_JSON") or os.getenv("GOOGLE_FLOW_SESSION_B64"):
+        return True
     return SESSION_FILE.exists() and SESSION_FILE.stat().st_size > 10

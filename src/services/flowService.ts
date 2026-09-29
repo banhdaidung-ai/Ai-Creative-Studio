@@ -113,17 +113,46 @@ async function safeImageToFile(imageInput: string, mime = 'image/jpeg', filename
   }
 }
 
+// ── URL & Host Detection ──────────────────────────────────────────────────────
+
+let detectedWorkingBase: string | null = null;
+
+export function setDetectedWorkingBase(url: string | null) {
+  detectedWorkingBase = url;
+}
+
+export function isLanOrLocalHostname(hostname?: string): boolean {
+  if (!hostname) return true;
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
+    hostname.endsWith('.local') ||
+    /^192\.168\.\d+\.\d+$/.test(hostname) ||
+    /^10\.\d+\.\d+\.\d+$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(hostname)
+  );
+}
+
 export function getFlowApiUrl(endpoint: string): string {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : undefined;
   const envUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FLOW_BACKEND_URL ? import.meta.env.VITE_FLOW_BACKEND_URL : undefined;
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
-  let targetBase = customUrl || envUrl;
+  let targetBase = customUrl || envUrl || detectedWorkingBase;
 
-  // Khi chạy trên web live đã deploy (Firebase Hosting / non-localhost) và chưa cấu hình URL tùy biến:
-  // Mặc định kết nối trực tiếp đến backend máy người dùng tại http://127.0.0.1:8000
-  if (!targetBase && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    targetBase = 'http://127.0.0.1:8000';
+  // Nếu không cấu hình thủ công:
+  // - Khi truy cập qua localhost hoặc mạng LAN (máy khác trong cùng Wi-Fi truy cập IP 192.168.x.x:3000):
+  //   DÙNG PROXY CHUẨN FLOW_PROXY_BASE (/api/flow)!
+  //   Vì máy chủ Node/Vite trên Mac đã có sẵn reverse proxy sang port 8000.
+  //   TUYỆT ĐỐI KHÔNG ép targetBase = 127.0.0.1:8000 ở đây vì máy khác sẽ tự gọi localhost của chính nó và thất bại!
+  // - Chỉ khi chạy trên môi trường hosting public từ xa (Firebase Hosting / Vercel, tức hostname không phải LAN):
+  //   Nếu người dùng đang mở trên chính máy Mac có chạy python backend, thử gán 'http://127.0.0.1:8000'.
+  if (!targetBase && typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (!isLanOrLocalHostname(hostname)) {
+      targetBase = 'http://127.0.0.1:8000';
+    }
   }
 
   if (targetBase) {
@@ -410,16 +439,51 @@ export async function enhancePromptViaFlow(prompt: string, mode: 'image' | 'vide
 // ── Backend Health Check ──────────────────────────────────────────────────────
 
 export async function isFlowBackendAvailable(): Promise<boolean> {
+  // 1. Thử URL chính (theo getFlowApiUrl)
+  const primaryUrl = getFlowApiUrl('/health');
   try {
-    const res = await fetch(getFlowApiUrl('/health'), { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(primaryUrl, { signal: AbortSignal.timeout(2500) });
     const contentType = res.headers.get('content-type') || '';
-    if (!res.ok || !contentType.includes('application/json')) {
-      return false; 
+    if (res.ok && contentType.includes('application/json')) {
+      const data = await res.json().catch(() => null);
+      if (data?.status === 'ok') return true;
     }
-    return true;
   } catch {
-    return false; 
+    // Primary URL không phản hồi, tiếp tục thử fallback
   }
+
+  // 2. Fallback thông minh: thử direct port 8000 nếu đang ở LAN hoặc localhost
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const candidates: string[] = [];
+
+    // Nếu đang ở máy khác cùng mạng LAN (ví dụ http://192.168.0.2:3000), thử kết nối trực tiếp đến port 8000 của Mac
+    if (isLanOrLocalHostname(hostname) && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      candidates.push(`http://${hostname}:8000`);
+    }
+    candidates.push('http://127.0.0.1:8000');
+    candidates.push('http://localhost:8000');
+
+    for (const base of candidates) {
+      const testUrl = `${base}/health`;
+      if (testUrl === primaryUrl) continue;
+      try {
+        const res = await fetch(testUrl, { signal: AbortSignal.timeout(1500) });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json().catch(() => null);
+          if (data?.status === 'ok') {
+            detectedWorkingBase = base;
+            return true;
+          }
+        }
+      } catch {
+        // Thử ứng viên tiếp theo
+      }
+    }
+  }
+
+  return false;
 }
 
 // ── Model IDs ─────────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import fs from 'fs';
 import net from 'net';
 import http from 'http';
 import https from 'https';
+import os from 'os';
 import { spawn } from 'child_process';
 import { GeminiService } from './server/gemini.js';
 
@@ -260,8 +261,25 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`\n🚀 AI Creative Studio running on http://localhost:${PORT}`);
+  function getLanIp(): string | null {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name] || []) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+    return null;
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    const lanIp = getLanIp();
+    console.log(`\n🚀 AI Creative Studio đang chạy:`);
+    console.log(`   ➜ Local:   http://localhost:${PORT}`);
+    if (lanIp) {
+      console.log(`   ➜ Network: http://${lanIp}:${PORT}  (Dùng link này để mở trên máy khác / điện thoại)`);
+    }
     console.log(`📡 Google Flow proxy → ${FLOW_BACKEND_URL}`);
 
     // Tự động bật flow-backend trong nền để sếp không phải chạy thủ công

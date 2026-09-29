@@ -53,14 +53,19 @@ echo "⚛️  Khởi động Frontend trên port 3000..."
 npm run dev &
 NODE_PID=$!
 
+LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
+
 echo ""
-echo "╔════════════════════════════════════════════╗"
-echo "║  AI Creative Studio — Đang chạy           ║"
-echo "╠════════════════════════════════════════════╣"
-echo "║  Frontend:      http://localhost:3000      ║"
-echo "║  Flow Backend:  http://localhost:8000      ║"
-echo "║  Flow API Docs: http://localhost:8000/docs ║"
-echo "╚════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║  AI Creative Studio — Đang chạy                              ║"
+echo "╠══════════════════════════════════════════════════════════════╣"
+echo "║  Máy này (Local):  http://localhost:3000                     ║"
+if [ -n "$LAN_IP" ]; then
+echo "║  Máy khác (LAN):   http://$LAN_IP:3000                 ║"
+fi
+echo "║  Flow Backend:     http://localhost:8000                     ║"
+echo "║  Flow API Docs:    http://localhost:8000/docs                ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Bấm Ctrl+C để dừng tất cả."
 

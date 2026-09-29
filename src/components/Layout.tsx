@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { AppMode } from '../types';
-import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, CheckCircle2, Loader2, RefreshCw, Box, ArrowRight, History, HelpCircle, Grid } from 'lucide-react';
+import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, CheckCircle2, Loader2, RefreshCw, Box, ArrowRight, History, HelpCircle, Grid, Globe, Wifi } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
+import { isFlowBackendAvailable } from '../services/flowService';
 
 interface LayoutProps {
   currentMode: AppMode;
@@ -27,7 +28,9 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   const [vertexAccessToken, setVertexAccessToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [configType, setConfigType] = useState<'google' | 'vertex'>('google');
+  const [configType, setConfigType] = useState<'google' | 'vertex' | 'flow'>('google');
+  const [flowBackendUrl, setFlowBackendUrl] = useState('');
+  const [flowBackendStatus, setFlowBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
 
   useEffect(() => {
     const checkKey = async () => {
@@ -69,6 +72,12 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
     return () => clearInterval(interval);
   }, []);
 
+  const checkFlowStatus = async () => {
+    setFlowBackendStatus('checking');
+    const available = await isFlowBackendAvailable();
+    setFlowBackendStatus(available ? 'connected' : 'disconnected');
+  };
+
   const handleOpenUnlock = () => {
       setShowUnlockModal(true);
       // Load existing values
@@ -76,11 +85,32 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
       setVertexProjectId(localStorage.getItem('vertex_project_id') || '');
       setVertexLocation(localStorage.getItem('vertex_location') || 'us-central1');
       setVertexAccessToken(localStorage.getItem('vertex_access_token') || '');
+      setFlowBackendUrl(localStorage.getItem('flow_backend_url') || '');
+      checkFlowStatus();
       if (localStorage.getItem('vertex_project_id')) {
         setConfigType('vertex');
       } else {
         setConfigType('google');
       }
+  };
+
+  const handleSaveFlowBackend = async () => {
+    setIsVerifying(true);
+    setFlowBackendStatus('checking');
+    const trimmed = flowBackendUrl.trim();
+    if (trimmed) {
+      localStorage.setItem('flow_backend_url', trimmed);
+    } else {
+      localStorage.removeItem('flow_backend_url');
+    }
+    const ok = await isFlowBackendAvailable();
+    setFlowBackendStatus(ok ? 'connected' : 'disconnected');
+    setIsVerifying(false);
+    if (ok) {
+      toast.success('Đã kết nối thành công đến Google Flow Backend!');
+    } else {
+      toast.error('Không thể kết nối đến URL Backend này. Vui lòng kiểm tra lại địa chỉ hoặc đảm bảo backend đang chạy.');
+    }
   };
 
   useEffect(() => {
@@ -443,32 +473,89 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                     {/* Option 2: Manual Config */}
                     <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col gap-3">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="flex gap-2 p-1 bg-black/40 rounded-lg">
+                            <div className="flex gap-1.5 p-1 bg-black/40 rounded-lg">
                                 <button 
                                     onClick={() => setConfigType('google')}
-                                    className={`px-3 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'google' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                                    className={`px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'google' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
                                 >
                                     Google AI
                                 </button>
                                 <button 
                                     onClick={() => setConfigType('vertex')}
-                                    className={`px-3 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'vertex' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                                    className={`px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'vertex' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
                                 >
                                     Vertex AI
                                 </button>
+                                <button 
+                                    onClick={() => setConfigType('flow')}
+                                    className={`px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'flow' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                                >
+                                    Google Flow
+                                </button>
                             </div>
-                            <div className={`p-2 rounded-xl ${configType === 'google' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                                {configType === 'google' ? <Key className="w-4 h-4" /> : <Box className="w-4 h-4" />}
+                            <div className={`p-2 rounded-xl ${configType === 'google' ? 'bg-purple-500/20 text-purple-400' : configType === 'vertex' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                {configType === 'google' ? <Key className="w-4 h-4" /> : configType === 'vertex' ? <Box className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
                             </div>
                         </div>
 
                         <div className="flex-1">
                             <div className="font-bold text-white text-sm mb-2 uppercase tracking-wide">
-                                {configType === 'google' ? 'Nhập API Key' : 'Cấu hình Vertex AI'}
+                                {configType === 'google' ? 'Nhập API Key' : configType === 'vertex' ? 'Cấu hình Vertex AI' : 'Google Flow Backend'}
                             </div>
                             
                             <div className="space-y-3">
-                                {configType === 'google' ? (
+                                {configType === 'flow' ? (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between text-[10px]">
+                                            <span className="text-slate-400 font-medium">Trạng thái backend:</span>
+                                            <span className={`font-bold flex items-center gap-1.5 ${
+                                                flowBackendStatus === 'connected' ? 'text-emerald-400' :
+                                                flowBackendStatus === 'checking' ? 'text-amber-400' : 'text-red-400'
+                                            }`}>
+                                                <span className={`w-2 h-2 rounded-full ${
+                                                    flowBackendStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                                                    flowBackendStatus === 'checking' ? 'bg-amber-400 animate-spin' : 'bg-red-500'
+                                                }`} />
+                                                {flowBackendStatus === 'connected' ? 'Đã kết nối (Sẵn sàng)' :
+                                                 flowBackendStatus === 'checking' ? 'Đang kiểm tra...' : 'Chưa kết nối'}
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-1">
+                                            <div className="flex items-center justify-between text-[10px]">
+                                                <span className="text-slate-400">Địa chỉ Backend URL</span>
+                                                <span className="text-[9px] text-slate-500">Mặc định: /api/flow</span>
+                                            </div>
+                                            <input 
+                                                type="text" 
+                                                value={flowBackendUrl}
+                                                onChange={(e) => setFlowBackendUrl(e.target.value)}
+                                                placeholder="Để trống dùng tự động, hoặc http://192.168.0.2:8000" 
+                                                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-white outline-none focus:border-emerald-500 transition-all font-mono"
+                                            />
+                                        </div>
+
+                                        <div className="p-2.5 bg-white/5 rounded-xl border border-white/5 text-[9px] text-slate-400 space-y-1 leading-relaxed">
+                                            <p className="text-slate-300 font-bold flex items-center gap-1">
+                                                <Wifi className="w-3 h-3 text-emerald-400" />
+                                                Mở trên máy khác cùng Wi-Fi:
+                                            </p>
+                                            <p>Truy cập vào địa chỉ IP mạng của máy chủ Mac: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">http://192.168.0.2:3000</code></p>
+                                            <p className="text-slate-500 text-[8px]">Hệ thống sẽ tự động chuyển tiếp yêu cầu đến Google Flow Backend trên máy Mac.</p>
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={handleSaveFlowBackend} 
+                                                disabled={isVerifying}
+                                                className="flex-1 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+                                            >
+                                                {isVerifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                                {isVerifying ? 'Đang kiểm tra...' : 'Lưu & Kiểm tra kết nối'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : configType === 'google' ? (
                                     <div className="space-y-1.5">
                                       <div className="flex items-center justify-between text-[10px]">
                                         <span className="text-slate-400">Gemini API Key</span>
@@ -518,23 +605,25 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                     </div>
                                 )}
 
-                                <div className="flex gap-2">
-                                    <button 
-                                        onClick={handleManualKey} 
-                                        disabled={isVerifying || (configType === 'google' ? manualKey.trim().length <= 10 : (!vertexProjectId.trim() || !vertexAccessToken.trim()))} 
-                                        className={`flex-1 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 text-white ${
-                                            configType === 'google' ? 'bg-purple-600 hover:bg-purple-500' : 'bg-blue-600 hover:bg-blue-500'
-                                        } disabled:opacity-50`}
-                                    >
-                                        {isVerifying && <Loader2 className="w-3 h-3 animate-spin" />}
-                                        {isVerifying ? 'Đang kiểm tra...' : 'Kích hoạt ngay'}
-                                    </button>
-                                    {apiKeySelected && (
-                                        <button onClick={handleResetKey} className="px-3 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 rounded-lg transition-all" title="Xóa cấu hình hiện tại">
-                                            <RefreshCw className="w-4 h-4" />
-                                        </button>
-                                    )}
-                                </div>
+                                {configType !== 'flow' && (
+                                  <div className="flex gap-2">
+                                      <button 
+                                          onClick={handleManualKey} 
+                                          disabled={isVerifying || (configType === 'google' ? manualKey.trim().length <= 10 : (!vertexProjectId.trim() || !vertexAccessToken.trim()))} 
+                                          className={`flex-1 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 text-white ${
+                                              configType === 'google' ? 'bg-purple-600 hover:bg-purple-500' : 'bg-blue-600 hover:bg-blue-500'
+                                          } disabled:opacity-50`}
+                                      >
+                                          {isVerifying && <Loader2 className="w-3 h-3 animate-spin" />}
+                                          {isVerifying ? 'Đang kiểm tra...' : 'Kích hoạt ngay'}
+                                      </button>
+                                      {apiKeySelected && (
+                                          <button onClick={handleResetKey} className="px-3 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 rounded-lg transition-all" title="Xóa cấu hình hiện tại">
+                                              <RefreshCw className="w-4 h-4" />
+                                          </button>
+                                      )}
+                                  </div>
+                                )}
                                 {errorMessage && (
                                     <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-lg text-[9px] text-red-400 font-medium animate-in slide-in-from-top-1 duration-200">
                                         {errorMessage}

@@ -564,3 +564,29 @@ async def clear_session():
     clear_cookies()
     await close_browser()
     return {"message": "Session đã được xoá. Lần chạy tiếp theo sẽ yêu cầu đăng nhập lại."}
+
+
+class ImportSessionPayload(BaseModel):
+    cookies: list[dict]
+
+
+@app.post("/api/import-session", tags=["Auth"])
+async def import_session(payload: ImportSessionPayload):
+    """Cập nhật / Import session cookies cho backend từ xa."""
+    from session_manager import save_cookies
+    from google_flow_client import close_browser
+    if not payload.cookies:
+        raise HTTPException(status_code=400, detail="Danh sách cookies không hợp lệ")
+    save_cookies(payload.cookies)
+    await close_browser()
+    return {"success": True, "message": f"Đã lưu thành công {len(payload.cookies)} cookies"}
+
+
+@app.get("/api/export-session", tags=["Auth"])
+async def export_session():
+    """Xuất session cookies hiện tại (dùng để đồng bộ lên Cloud)."""
+    from session_manager import load_cookies
+    cookies = load_cookies()
+    if not cookies:
+        raise HTTPException(status_code=404, detail="Chưa có session")
+    return {"cookies": cookies}

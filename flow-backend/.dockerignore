@@ -1,0 +1,10 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+media_cache/*
+temp_uploads/*
+!media_cache/.gitkeep
+!temp_uploads/.gitkeep

@@ -104,3 +104,37 @@ def remove_gemini_watermark(image_bytes: bytes) -> bytes:
     except Exception as e:
         logger.warning(f"Lỗi khi xử lý xóa watermark Gemini: {e}")
         return image_bytes
+
+
+def has_gemini_watermark(image_bytes: bytes) -> bool:
+    """
+    Kiểm tra nhanh xem ảnh có chứa logo watermark Gemini ở góc dưới bên phải không.
+    Trả về True nếu độ khớp template >= 0.22.
+    """
+    if not image_bytes:
+        return False
+    try:
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return False
+        h, w = img.shape[:2]
+        if h < 200 or w < 200:
+            return False
+        roi_size = min(220, h, w)
+        roi = img[h - roi_size : h, w - roi_size : w]
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        tpl = _get_astroid_template()
+        th, tw = tpl.shape
+        sy1 = max(0, roi_size - 180)
+        sy2 = max(sy1 + th + 10, roi_size - 15)
+        sx1 = max(0, roi_size - 180)
+        sx2 = max(sx1 + tw + 10, roi_size - 15)
+        search_area = gray_roi[sy1:sy2, sx1:sx2]
+        if search_area.shape[0] < th or search_area.shape[1] < tw:
+            return False
+        res = cv2.matchTemplate(search_area, tpl, cv2.TM_CCOEFF_NORMED)
+        min_v, max_v, min_l, max_l = cv2.minMaxLoc(res)
+        return bool(max_v >= 0.22)
+    except Exception:
+        return False

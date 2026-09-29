@@ -36,7 +36,7 @@ if _client_dir not in sys.path:
     sys.path.insert(0, _client_dir)
 
 from session_manager import load_cookies, save_cookies, has_valid_session
-from watermark_remover import remove_gemini_watermark
+from watermark_remover import has_gemini_watermark, remove_gemini_watermark
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def enforce_aspect_ratio(image_bytes: bytes, target_ratio: str) -> tuple[bytes, 
 def is_visually_similar(
     ref_image_path_or_bytes: Union[str, Path, bytes],
     candidate_bytes: bytes,
-    threshold: float = 12.0
+    threshold: float = 2.0
 ) -> tuple[bool, float]:
     """
     So sánh độ tương đồng trực quan giữa ảnh tham chiếu và ảnh ứng viên bằng Pillow.
@@ -1018,18 +1018,22 @@ async def _wait_for_new_images(
                         body = await resp.body()
 
                         # Kiểm tra độ tương đồng trực quan với ảnh tham chiếu bằng Pillow
-                        if ref_bytes:
-                            is_same, diff_score = is_visually_similar(ref_bytes, body, threshold=12.0)
+                        # Nếu ảnh có watermark Gemini thì chắc chắn 100% là ảnh do Google Flow AI vừa tạo ra
+                        has_wm = has_gemini_watermark(body)
+                        if has_wm:
+                            logger.info(f"✨ Phát hiện watermark Gemini trên ảnh mới tạo (size: {len(body)} bytes) -> Xác nhận đây là ảnh AI từ Google Flow!")
+                        elif ref_bytes:
+                            is_same, diff_score = is_visually_similar(ref_bytes, body, threshold=2.0)
                             if is_same:
                                 logger.warning(
                                     f"⚠️ Bỏ qua ảnh vì giống hệt ảnh người mẫu tham chiếu "
-                                    f"(diff: {diff_score:.2f} < 12.0, size: {len(body)} bytes)!"
+                                    f"(diff: {diff_score:.2f} < 2.0, size: {len(body)} bytes)!"
                                 )
                                 ref_urls.add(src)
                                 existing_urls.add(src)
                                 continue
                             else:
-                                logger.info(f"✅ Ảnh AI hợp lệ (diff trực quan: {diff_score:.2f} >= 12.0, size: {len(body)} bytes)")
+                                logger.info(f"✅ Ảnh AI hợp lệ (diff trực quan: {diff_score:.2f} >= 2.0, size: {len(body)} bytes)")
 
                         # Tự động phát hiện và xóa sạch watermark Google Gemini (nếu có)
                         clean_body = remove_gemini_watermark(body)

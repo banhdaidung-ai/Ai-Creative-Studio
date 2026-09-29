@@ -135,8 +135,10 @@ async def run_image_generation_job(
     prompt: str,
     aspect_ratio: str,
     num_images: int,
-    reference_image_path: Optional[str],
+    reference_image_path: Optional[str] = None,
     model: str = "google-flow-nano-banana-pro",
+    model_image_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
 ):
     """Background task: tạo ảnh qua Google Flow."""
     job_store[job_id]["status"] = JobStatus.processing
@@ -151,6 +153,8 @@ async def run_image_generation_job(
             job_id=job_id,
             model=model,
             progress_callback=update_job_progress,
+            model_image_path=model_image_path,
+            reference_image_paths=reference_image_paths,
         )
 
         if not images_raw:
@@ -183,11 +187,19 @@ async def run_image_generation_job(
         })
     finally:
         # Dọn file upload tạm
-        if reference_image_path and Path(reference_image_path).exists():
-            try:
-                Path(reference_image_path).unlink()
-            except Exception:
-                pass
+        cleanup_paths = set()
+        if reference_image_path:
+            cleanup_paths.add(reference_image_path)
+        if model_image_path:
+            cleanup_paths.add(model_image_path)
+        if reference_image_paths:
+            cleanup_paths.update(reference_image_paths)
+        for p in cleanup_paths:
+            if p and Path(p).exists():
+                try:
+                    Path(p).unlink()
+                except Exception:
+                    pass
 
 
 async def run_video_generation_job(
@@ -328,13 +340,33 @@ async def generate_image_endpoint(
     num_images: int = Form(1),
     model: str = Form("google-flow-nano-banana-pro"),
     reference_image: Optional[UploadFile] = File(None),
+    model_image: Optional[UploadFile] = File(None),
+    reference_images: Optional[list[UploadFile]] = File(None),
 ):
     """
     Endpoint tạo ảnh chuyên biệt với các mô hình Google Flow (Nano Banana Pro / 2 / 2 Lite).
-    Hỗ trợ prompt, tỷ lệ khung hình (aspect_ratio), ảnh tham chiếu (reference_image), model.
+    Hỗ trợ prompt, tỷ lệ khung hình (aspect_ratio), ảnh người mẫu (model_image), ảnh tham chiếu (reference_images / reference_image), model.
     """
     if not prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt không được để trống.")
+
+    model_image_path: Optional[str] = None
+    if model_image and model_image.filename:
+        suffix = Path(model_image.filename).suffix or ".jpg"
+        temp_path = TEMP_UPLOAD_DIR / f"model_{uuid.uuid4()}{suffix}"
+        content = await model_image.read()
+        temp_path.write_bytes(content)
+        model_image_path = str(temp_path)
+
+    ref_paths: list[str] = []
+    if reference_images:
+        for ref_file in reference_images:
+            if ref_file and ref_file.filename:
+                suffix = Path(ref_file.filename).suffix or ".jpg"
+                temp_path = TEMP_UPLOAD_DIR / f"ref_{uuid.uuid4()}{suffix}"
+                content = await ref_file.read()
+                temp_path.write_bytes(content)
+                ref_paths.append(str(temp_path))
 
     reference_image_path: Optional[str] = None
     if reference_image and reference_image.filename:
@@ -343,6 +375,8 @@ async def generate_image_endpoint(
         content = await reference_image.read()
         temp_path.write_bytes(content)
         reference_image_path = str(temp_path)
+        if reference_image_path not in ref_paths:
+            ref_paths.append(reference_image_path)
 
     job_id = str(uuid.uuid4())
     job_store[job_id] = {
@@ -364,6 +398,8 @@ async def generate_image_endpoint(
         num_images=min(num_images, 4),
         reference_image_path=reference_image_path,
         model=model,
+        model_image_path=model_image_path,
+        reference_image_paths=ref_paths if ref_paths else None,
     )
 
     logger.info(f"🎨 Image Job {job_id[:8]} [{model}] created for: '{prompt[:50]}...'")

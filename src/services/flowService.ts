@@ -44,6 +44,9 @@ export interface FlowGenerateImageOptions {
   model?: string;
   referenceImageBase64?: string;
   referenceImageMime?: string;
+  modelImageBase64?: string;
+  modelImageMime?: string;
+  referenceImagesBase64?: string[];
 }
 
 export interface FlowGenerateVideoOptions {
@@ -283,6 +286,29 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
     formData.append('model', options.model);
   }
 
+  // 1. Ảnh người mẫu chính (nếu có)
+  if (options.modelImageBase64) {
+    const mime = options.modelImageMime || 'image/jpeg';
+    const file = await safeImageToFile(options.modelImageBase64, mime, 'model.jpg');
+    if (file && file.size > 0) {
+      formData.append('model_image', file);
+    }
+  }
+
+  // 2. Danh sách ảnh tham chiếu (bối cảnh, chi tiết, trang phục...)
+  if (options.referenceImagesBase64 && options.referenceImagesBase64.length > 0) {
+    for (let i = 0; i < options.referenceImagesBase64.length; i++) {
+      const imgBase64 = options.referenceImagesBase64[i];
+      if (imgBase64) {
+        const file = await safeImageToFile(imgBase64, 'image/jpeg', `ref_${i}.jpg`);
+        if (file && file.size > 0) {
+          formData.append('reference_images', file);
+        }
+      }
+    }
+  }
+
+  // 3. Fallback đơn ảnh tham chiếu (tương thích ngược)
   if (options.referenceImageBase64) {
     const mime = options.referenceImageMime || 'image/jpeg';
     const file = await safeImageToFile(options.referenceImageBase64, mime, 'reference.jpg');

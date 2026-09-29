@@ -412,6 +412,15 @@ const ImageEditor: React.FC = () => {
             }
           }
 
+          let modelMime = 'image/jpeg';
+          if (modelImage) {
+            if (modelImage.startsWith('data:image/png') || modelImage.startsWith('iVBORw0KGgo')) {
+              modelMime = 'image/png';
+            } else if (modelImage.startsWith('data:image/webp') || modelImage.startsWith('UklGR')) {
+              modelMime = 'image/webp';
+            }
+          }
+
           const flowPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao dựa trên ảnh tham chiếu, ánh sáng studio nghệ thuật';
 
           const flowResult = await generateImageViaFlow(
@@ -420,6 +429,9 @@ const ImageEditor: React.FC = () => {
               aspectRatio,
               numImages: 1,
               model: effectiveModelId,
+              modelImageBase64: modelImage || undefined,
+              modelImageMime: modelMime,
+              referenceImagesBase64: refImages.length > 0 ? refImages : undefined,
               referenceImageBase64: activeRef,
               referenceImageMime: refMime,
             },

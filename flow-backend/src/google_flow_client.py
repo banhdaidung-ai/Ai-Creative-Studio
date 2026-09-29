@@ -344,9 +344,13 @@ async def ensure_in_project(page: Page):
     await page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=25000)
     await asyncio.sleep(1.5)
 
-    # 1. Thử bấm "New project" để luôn có không gian làm việc sạch
+    # 1. Thử bấm "New project" hoặc "Dự án mới" để luôn có không gian làm việc sạch
     try:
-        new_proj_btn = page.get_by_text("New project")
+        new_proj_btn = (
+            page.get_by_text("New project")
+            or page.get_by_text("Dự án mới")
+            or page.get_by_text("+ Dự án mới")
+        )
         if await new_proj_btn.count() > 0:
             await new_proj_btn.first.click()
             await page.wait_for_url("**/project/**", timeout=15000)
@@ -356,16 +360,16 @@ async def ensure_in_project(page: Page):
     except Exception as e:
         logger.debug(f"Không thể bấm New project bằng get_by_text: {e}")
 
-    # 2. Thử các nút Start Creating hoặc selector khác
+    # 2. Thử các nút Start Creating hoặc selector khác (kể cả tiếng Việt)
     start_btn = await page.query_selector(
-        'button:has-text("Start Creating"), button:has-text("Bắt đầu"), [aria-label*="New project"], [role="button"]:has-text("New project")'
+        'button:has-text("Start Creating"), button:has-text("Bắt đầu"), [aria-label*="New project"], [role="button"]:has-text("New project"), button:has-text("Dự án mới"), [role="button"]:has-text("Dự án mới"), div:has-text("+ Dự án mới")'
     )
     if start_btn:
         await start_btn.click()
         try:
             await page.wait_for_url("**/project/**", timeout=15000)
             await asyncio.sleep(2)
-            logger.info(f"✨ Đã vào project mới qua Start Creating: {page.url}")
+            logger.info(f"✨ Đã vào project mới qua Start Creating / Dự án mới: {page.url}")
             return
         except Exception:
             pass
@@ -539,9 +543,9 @@ async def _get_all_media_urls(page: Page) -> set[str]:
         return set()
 
 
-async def _upload_reference_image(page: Page, reference_image_path: str) -> set[str]:
+async def _upload_single_reference_image(page: Page, reference_image_path: str) -> set[str]:
     """
-    Tải ảnh tham chiếu lên Google Flow và bấm 'Thêm vào câu lệnh'.
+    Tải một file ảnh tham chiếu lên Google Flow và bấm 'Thêm vào câu lệnh'.
     Sau khi thêm, đóng sạch mọi overlay drawer và backdrop để không cản trở thao tác tiếp theo.
     Trả về tập hợp các URL liên quan đến ảnh tham chiếu để loại trừ triệt để khỏi kết quả tạo.
     """
@@ -648,30 +652,122 @@ async def _upload_reference_image(page: Page, reference_image_path: str) -> set[
         return ref_urls
 
 
+async def _upload_reference_images(page: Page, reference_image_paths: list[str]) -> set[str]:
+    """
+    Tải nhiều ảnh tham chiếu lên Google Flow (ví dụ: Ảnh mẫu người mẫu + Ảnh bối cảnh/trang phục).
+    Đính kèm từng ảnh thành các chip riêng biệt trong ô prompt.
+    Trả về toàn bộ URL liên quan đến các ảnh tham chiếu đã tải lên để loại trừ triệt để.
+    """
+    all_ref_urls: set[str] = set()
+    valid_paths = [p for p in reference_image_paths if p and Path(p).exists()]
+    if not valid_paths:
+        return all_ref_urls
+
+    for idx, path in enumerate(valid_paths):
+        logger.info(f"📤 Đang đính kèm ảnh tham chiếu #{idx + 1}/{len(valid_paths)} vào Flow: {path}")
+        urls = await _upload_single_reference_image(page, path)
+        all_ref_urls.update(urls)
+        await asyncio.sleep(1.0)
+
+    # Đảm bảo dọn sạch overlay sau khi tải xong tất cả
+    try:
+        await page.keyboard.press("Escape")
+        await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
+    return all_ref_urls
+
+
 # ── Prompt Optimization for Google Flow ─────────────────────────────────────────
 
-def format_flow_prompt(prompt: str, has_reference: bool = False) -> str:
+def format_flow_prompt(
+    prompt: str,
+    has_reference: bool = False,
+    num_references: int = 1,
+    has_model_and_bg: bool = False,
+) -> str:
     """
-    Tối ưu prompt cho Google Flow (Imagen 3 / Nano Banana).
-    Đảm bảo chất lượng tương đương Google AI Studio với các chỉ số ánh sáng và nhiếp ảnh thương mại.
-    Nếu có ảnh tham chiếu: Bổ sung chỉ dẫn tiếng Anh nghiêm ngặt để bám sát người mẫu và trang phục.
+    Tối ưu prompt cho Google Flow (Imagen 3 / Nano Banana Pro).
+    Đảm bảo chất lượng thương mại đẳng cấp studio lookbook.
+    
+    Phân tích thông minh các tác vụ e-commerce:
+    1. THAY ĐỔI BỐI CẢNH (Background Replacement):
+       - Bắt buộc GIỮ NGUYÊN 100% người mẫu (khuôn mặt, thần thái, vóc dáng, tư thế)
+       - ĐẶC BIỆT: Bắt buộc GIỮ NGUYÊN 100% TOÀN BỘ TRANG PHỤC (áo, quần/váy, tất, giày, phụ kiện)
+       - Xóa sạch phông nền cũ (studio trắng), ghép người mẫu sang bối cảnh mới từ ảnh tham chiếu hoặc mô tả.
+    2. ĐỔI MÀU ÁO / QUẦN:
+       - Chỉ đổi màu áo theo yêu cầu, giữ nguyên kiểu dáng, người mẫu và bối cảnh.
+    3. MẶC THỬ ĐỒ / TRY-ON:
+       - Giữ khuôn mặt và vóc dáng người mẫu, thay trang phục theo mẫu đồ tham chiếu.
+    4. TẠO ẢNH CHUNG:
+       - Bảo toàn danh tính người mẫu và trang phục gốc, nâng cấp ánh sáng thương mại cao cấp.
     """
     clean_prompt = prompt.strip()
     
-    # Từ khóa chất lượng studio cao cấp tương đương Google AI Studio
     studio_quality_suffix = (
         "masterpiece, 8k uhd resolution, Hasselblad medium format commercial photography, "
-        "professional fashion studio lighting, soft diffused shadows, razor-sharp focus, "
+        "natural lighting, soft diffused shadows, razor-sharp focus, "
         "natural photorealistic textures, true-to-life skin tones, highly detailed"
     )
 
     if not has_reference:
-        # Nếu prompt chưa có các từ khóa chất lượng cao, tự động đính kèm
         if not any(kw in clean_prompt.lower() for kw in ["8k", "photorealistic", "studio lighting", "hasselblad"]):
             return f"{clean_prompt}, {studio_quality_suffix}"
         return clean_prompt
 
     lower_p = clean_prompt.lower()
+
+    # 1. Phát hiện tác vụ THAY ĐỔI BỐI CẢNH / GHÉP NỀN (Background replacement)
+    is_bg_change = any(kw in lower_p for kw in [
+        "thay bối cảnh", "đổi bối cảnh", "chuyển bối cảnh", "ghép bối cảnh",
+        "bối cảnh ở hình tham chiếu", "bối cảnh hình tham chiếu", "bối cảnh tham chiếu",
+        "bối cảnh mới", "bối cảnh khác",
+        "thay nền", "đổi nền", "chuyển nền", "ghép nền",
+        "nền ở hình tham chiếu", "nền hình tham chiếu", "nền tham chiếu",
+        "nền mới", "nền khác", "nền ngoài trời", "nền trong nhà",
+        "thay background", "đổi background", "chuyển background", "ghép background",
+        "background ở hình tham chiếu", "background hình tham chiếu", "background tham chiếu",
+        "background mới", "background khác",
+        "đặt vào bối cảnh", "đưa vào bối cảnh", "ghép vào bối cảnh",
+        "đặt vào nền", "đưa vào nền", "ghép vào nền",
+        "ngoại cảnh", "ngoài trời", "sân vườn", "công viên", "đường phố",
+        "quán cafe", "quán cà phê", "bãi biển", "resort", "hồ bơi",
+        "phố đi bộ", "trung tâm thương mại", "phòng khách", "ban công",
+        "change background", "replace background", "swap background",
+        "new background", "different background", "outdoor background",
+        "garden background", "park background", "street background",
+        "background from reference", "scene from reference"
+    ])
+
+    if is_bg_change:
+        if has_model_and_bg or num_references >= 2:
+            bg_instruction = (
+                "CRITICAL FASHION COMPOSITION & CLOTHING PRESERVATION RULES:\n"
+                "1. SUBJECT & CLOTHING PRESERVATION: Strictly preserve the exact female model from the first reference image. "
+                "Maintain her exact facial features, natural Asian beauty, radiant smile, hairstyle, headband, and body pose completely intact. "
+                "ABSOLUTELY CRITICAL: PRESERVE HER ENTIRE ORIGINAL CLOTHING AND OUTFIT 100% IDENTICAL — DO NOT change, alter, or replace her top garment, "
+                "skirt, pants, shorts, socks, footwear/shoes, or accessories. Her outfit must remain exactly identical to the first reference image without any modifications.\n"
+                "2. BACKGROUND REPLACEMENT: Completely remove the studio white background. "
+                "Seamlessly place this exact model (wearing her exact original outfit) into the target outdoor background environment shown in the second reference image (such as the outdoor garden, lush green lawn, trees, pathway, and natural greenery).\n"
+                "3. LIGHTING & REALISM: Integrate her naturally with warm daylight, natural soft directional shadows, realistic contact shadows beneath her shoes on the ground, "
+                "and zero white halos or edge artifacts. Razor-sharp commercial lookbook fashion photography."
+            )
+        else:
+            bg_instruction = (
+                "CRITICAL FASHION COMPOSITION & CLOTHING PRESERVATION RULES:\n"
+                "1. SUBJECT & CLOTHING PRESERVATION: Strictly preserve the exact female model from the reference image. "
+                "Maintain her identical facial features, smile, hair, and body pose completely intact. "
+                "ABSOLUTELY CRITICAL: PRESERVE HER ENTIRE ORIGINAL CLOTHING AND OUTFIT 100% IDENTICAL — DO NOT change, alter, or replace her top garment, "
+                "skirt, pants, shorts, socks, footwear/shoes, or accessories. Every piece of clothing must remain exactly as in the reference image.\n"
+                "2. BACKGROUND REPLACEMENT: Completely remove the original plain studio background. "
+                f"Seamlessly place this exact model in her original outfit into the requested environment: {clean_prompt}.\n"
+                "3. LIGHTING & REALISM: Realistic environmental sunlight and ambient shadows matching the new scene, "
+                "natural ground shadows beneath her shoes, zero white halos, razor-sharp focus."
+            )
+        return f"{clean_prompt}. {bg_instruction} {studio_quality_suffix}"
+
+    # 2. Phát hiện tác vụ ĐỔI MÀU ÁO / TRANG PHỤC
     color_map = {
         "tím than": "navy blue / deep dark purple-blue",
         "xanh tím than": "navy blue",
@@ -712,23 +808,24 @@ def format_flow_prompt(prompt: str, has_reference: bool = False) -> str:
             detected_color = en_col
             break
 
-    is_garment_edit = any(kw in lower_p for kw in [
-        "đổi màu áo", "thay màu áo", "đổi áo", "thay áo", 
-        "đổi màu quần", "thay quần", "đổi màu", "thay màu",
-        "mặc áo", "chuyển sang áo", "thành áo", "thành màu"
+    is_color_edit = any(kw in lower_p for kw in [
+        "đổi màu áo", "thay màu áo", "đổi màu quần", "thay màu quần",
+        "đổi màu váy", "thay màu váy", "đổi màu", "thay màu",
+        "chuyển sang màu", "thành màu"
     ])
 
-    if is_garment_edit:
+    if is_color_edit:
         target_color = detected_color if detected_color else "new specified color"
         edit_instruction = (
-            f"Modify the outfit from the reference image: the top garment is now {target_color}. "
+            f"Modify ONLY the color of the target garment from the reference image: change it to {target_color}. "
             "CRITICAL: Keep the exact same female model, same face, same hairstyle, same body pose, "
-            "same shorts, same accessories, and same clean studio white background as the reference image. "
+            "same lower garment, same accessories, and same background as the reference image. "
             f"{studio_quality_suffix}."
         )
         return f"{clean_prompt}. {edit_instruction}"
-    
-    return f"{clean_prompt}. Based on the reference image, strictly preserve the model's identity, face, pose, and clean background seamlessly. {studio_quality_suffix}."
+
+    # 3. Mặc định cho ảnh có tham chiếu: Bảo toàn người mẫu, khuôn mặt, tư thế và trang phục gốc
+    return f"{clean_prompt}. Based on the reference image, strictly preserve the model's identity, facial features, body pose, and original outfit style. {studio_quality_suffix}."
 
 
 # ── Image Generation ───────────────────────────────────────────────────────────
@@ -741,11 +838,12 @@ async def generate_image_on_flow(
     job_id: str = "",
     model: str = "google-flow-nano-banana-pro",
     progress_callback=None,
+    model_image_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
 ) -> list[dict]:
     """
     Tạo ảnh trên Google Flow sử dụng các model Nano Banana Pro / 2 / 2 Lite.
-    Nhận prompt, tỷ lệ khung hình (aspect_ratio), ảnh tham chiếu (reference_image_path), model.
-    Trả về list[{url, width, height, mime_type}]
+    Hỗ trợ đa ảnh tham chiếu: Ảnh người mẫu (model_image_path) + Các ảnh bối cảnh/trang phục (reference_image_paths).
     """
     context = await get_browser_context()
     page = await context.new_page()
@@ -770,19 +868,39 @@ async def generate_image_on_flow(
 
         await configure_flow_settings(page, mode="image", aspect_ratio=aspect_ratio, model_name=model)
 
-        # Upload ảnh tham chiếu trước nếu có (để chip đính kèm vào thanh prompt)
+        # Xây dựng danh sách ảnh tham chiếu có thứ tự: Ảnh người mẫu đầu tiên, tiếp theo là ảnh bối cảnh
+        ordered_paths: list[str] = []
+        if model_image_path and Path(model_image_path).exists():
+            ordered_paths.append(model_image_path)
+
+        if reference_image_paths:
+            for p in reference_image_paths:
+                if p and Path(p).exists() and p not in ordered_paths:
+                    ordered_paths.append(p)
+        elif reference_image_path and Path(reference_image_path).exists() and reference_image_path not in ordered_paths:
+            ordered_paths.append(reference_image_path)
+
+        has_ref = len(ordered_paths) > 0
+        has_model_and_bg = bool(model_image_path and len(ordered_paths) >= 2)
+
+        # Upload các ảnh tham chiếu lên Google Flow (gắn thành từng chip trong ô prompt)
         ref_urls: set[str] = set()
-        has_ref = bool(reference_image_path and Path(reference_image_path).exists())
         if has_ref:
             if progress_callback:
-                await progress_callback(job_id, 40, "Đang tải ảnh tham chiếu lên Google Flow...")
-            ref_urls = await _upload_reference_image(page, reference_image_path)
+                msg = f"Đang tải {len(ordered_paths)} ảnh tham chiếu (người mẫu & bối cảnh) lên Google Flow..."
+                await progress_callback(job_id, 40, msg)
+            ref_urls = await _upload_reference_images(page, ordered_paths)
             await asyncio.sleep(1.2)
 
         if progress_callback:
-            await progress_callback(job_id, 48, "Đang nhập prompt tạo ảnh...")
+            await progress_callback(job_id, 48, "Đang chuẩn hóa prompt theo tiêu chuẩn thương mại cao cấp...")
 
-        effective_prompt = format_flow_prompt(prompt, has_reference=has_ref)
+        effective_prompt = format_flow_prompt(
+            prompt,
+            has_reference=has_ref,
+            num_references=len(ordered_paths),
+            has_model_and_bg=has_model_and_bg,
+        )
         logger.info(f"📝 Prompt gửi tới Google Flow: {effective_prompt}")
 
         prompt_input = await page.wait_for_selector(
@@ -837,7 +955,7 @@ async def generate_image_on_flow(
             existing_urls=existing_urls,
             job_id=job_id,
             progress_callback=progress_callback,
-            reference_image_path=reference_image_path,
+            reference_image_paths=ordered_paths,
             reference_urls=ref_urls,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
@@ -863,6 +981,7 @@ async def _wait_for_new_images(
     job_id: str,
     progress_callback,
     reference_image_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
     reference_urls: Optional[set[str]] = None,
     prompt: str = "",
     aspect_ratio: str = "1:1",
@@ -876,16 +995,22 @@ async def _wait_for_new_images(
     start = time.time()
     progress_step = 60
     ref_urls = set(reference_urls or [])
-    ref_filename = Path(reference_image_path).name.lower() if reference_image_path else ""
 
-    # Đọc bytes của file ảnh tham chiếu để đối chiếu hash và visual similarity
-    ref_bytes = None
-    if reference_image_path and Path(reference_image_path).exists():
-        try:
-            ref_bytes = Path(reference_image_path).read_bytes()
-            logger.info(f"🛡️ Kích hoạt kiểm tra đối chiếu trực quan ảnh tham chiếu ({len(ref_bytes)} bytes)")
-        except Exception as e:
-            logger.debug(f"Không thể đọc file ảnh tham chiếu: {e}")
+    # Tổng hợp danh sách tất cả file tham chiếu để đối chiếu hash và visual similarity
+    all_check_paths: list[str] = list(reference_image_paths or [])
+    if reference_image_path and reference_image_path not in all_check_paths:
+        all_check_paths.append(reference_image_path)
+
+    ref_filenames = [Path(p).name.lower() for p in all_check_paths if p]
+    ref_bytes_list: list[bytes] = []
+    for p in all_check_paths:
+        if p and Path(p).exists():
+            try:
+                ref_bytes_list.append(Path(p).read_bytes())
+            except Exception as e:
+                logger.debug(f"Không thể đọc file ảnh tham chiếu {p}: {e}")
+    if ref_bytes_list:
+        logger.info(f"🛡️ Kích hoạt kiểm tra đối chiếu trực quan {len(ref_bytes_list)} ảnh tham chiếu")
 
     rendering_seen = False
 
@@ -942,13 +1067,11 @@ async def _wait_for_new_images(
                 progress_step = progress
                 await progress_callback(
                     job_id, progress,
-                    f"Nano Banana Pro đang khởi động tạo ảnh... ({int(elapsed)}s)"
+                    f"Nano Banana Pro đang chuẩn bị render... ({int(elapsed)}s)"
                 )
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(1.0)
             continue
 
-        # Cập nhật thanh tiến độ khi chờ kết quả hoàn thành
-        progress = min(60 + int((elapsed / timeout) * 35), 95)
         if progress_callback and progress > progress_step:
             progress_step = progress
             await progress_callback(
@@ -957,7 +1080,7 @@ async def _wait_for_new_images(
             )
 
         # Lấy các img hoàn chỉnh trên canvas (loại trừ tile đang render, tile ảnh tải lên)
-        candidates = await page.evaluate('''(refName) => {
+        candidates = await page.evaluate('''(refNames) => {
             const tiles = Array.from(document.querySelectorAll('flow-grid-tile-container, .tile-container'));
             const results = [];
             const fileExtRegex = /\\.(jpe?g|png|webp|gif|bmp)(\\?|$)/i;
@@ -982,7 +1105,9 @@ async def _wait_for_new_images(
                 if (fileExtRegex.test(ariaLabel) || fileExtRegex.test(title)) return;
 
                 // 3. Tile trùng tên file tham chiếu vừa upload -> bỏ qua
-                if (refName && (ariaLabel.includes(refName) || title.includes(refName))) return;
+                for (const refName of (refNames || [])) {
+                    if (refName && (ariaLabel.includes(refName) || title.includes(refName))) return;
+                }
 
                 // 4. Tile chứa từ khóa tải lên -> bỏ qua
                 for (const kw of uploadKeywords) {
@@ -1003,7 +1128,7 @@ async def _wait_for_new_images(
             });
 
             return results;
-        }''', ref_filename)
+        }''', ref_filenames)
 
         # Lọc ra các URL chưa từng thấy
         new_candidates = [c for c in candidates if c['src'] not in existing_urls and c['src'] not in ref_urls]
@@ -1017,23 +1142,28 @@ async def _wait_for_new_images(
                     if resp.status == 200:
                         body = await resp.body()
 
-                        # Kiểm tra độ tương đồng trực quan với ảnh tham chiếu bằng Pillow
+                        # Kiểm tra độ tương đồng trực quan với tất cả ảnh tham chiếu bằng Pillow
                         # Nếu ảnh có watermark Gemini thì chắc chắn 100% là ảnh do Google Flow AI vừa tạo ra
                         has_wm = has_gemini_watermark(body)
                         if has_wm:
                             logger.info(f"✨ Phát hiện watermark Gemini trên ảnh mới tạo (size: {len(body)} bytes) -> Xác nhận đây là ảnh AI từ Google Flow!")
-                        elif ref_bytes:
-                            is_same, diff_score = is_visually_similar(ref_bytes, body, threshold=2.0)
-                            if is_same:
-                                logger.warning(
-                                    f"⚠️ Bỏ qua ảnh vì giống hệt ảnh người mẫu tham chiếu "
-                                    f"(diff: {diff_score:.2f} < 2.0, size: {len(body)} bytes)!"
-                                )
+                        elif ref_bytes_list:
+                            is_ref_clone = False
+                            for rb in ref_bytes_list:
+                                is_same, diff_score = is_visually_similar(rb, body, threshold=2.0)
+                                if is_same:
+                                    logger.warning(
+                                        f"⚠️ Bỏ qua ảnh vì giống hệt ảnh tham chiếu đã tải lên "
+                                        f"(diff: {diff_score:.2f} < 2.0, size: {len(body)} bytes)!"
+                                    )
+                                    is_ref_clone = True
+                                    break
+                            if is_ref_clone:
                                 ref_urls.add(src)
                                 existing_urls.add(src)
                                 continue
                             else:
-                                logger.info(f"✅ Ảnh AI hợp lệ (diff trực quan: {diff_score:.2f} >= 2.0, size: {len(body)} bytes)")
+                                logger.info(f"✅ Ảnh AI hợp lệ (size: {len(body)} bytes)")
 
                         # Tự động phát hiện và xóa sạch watermark Google Gemini (nếu có)
                         clean_body = remove_gemini_watermark(body)

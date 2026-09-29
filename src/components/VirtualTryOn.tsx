@@ -188,6 +188,9 @@ const VirtualTryOn: React.FC = () => {
             aspectRatio,
             numImages: 1,
             model: selectedModelId,
+            modelImageBase64: modelImage || undefined,
+            modelImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+            referenceImagesBase64: refs.length > 0 ? refs : undefined,
             referenceImageBase64: modelImage || undefined,
             referenceImageMime: modelImage?.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
           });

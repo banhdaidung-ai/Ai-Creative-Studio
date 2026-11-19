@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
@@ -47,4 +48,35 @@
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(59, 130, 246, 0.5);
+}
+
+/* Defer rendering & isolate layout/paint for offscreen media cards */
+.cv-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px auto 320px;
+}
+
+.cv-thumb {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px auto 180px;
+}
+
+@supports not (content-visibility: auto) {
+  .cv-card,
+  .cv-thumb {
+    contain: layout style paint;
+  }
+}
+
+.isolated-panel {
+  contain: layout style;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-ping,
+  .animate-bounce,
+  .animate-blob {
+    animation: none !important;
+  }
 }

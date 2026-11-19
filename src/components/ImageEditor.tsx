@@ -1,27 +1,31 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { geminiService } from '../services/gemini';
 import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
+import { isMuseModel, generateImageViaMuse } from '../services/museService';
 import { resizeImage, smoothImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
-import PhotoEditor from './PhotoEditor';
 import { useProject } from '../contexts/ProjectContext';
 import { toast } from 'sonner';
 import { 
   X, Loader2, Sparkles, Image as ImageIcon, 
   Zap, Download, Columns, 
   Upload, Maximize2, ZoomIn, ZoomOut, AlertCircle, Wand2,
-  Settings2, ChevronUp, ChevronDown, Crown, Sliders, PenTool,
+  Settings2, ChevronDown, Crown, Sliders, PenTool,
   Plus, Check, Eraser, BookOpen, ChevronsUp, Box, Brush,
-  History, Trash2, Dices, Copy, Search, Eye, EyeOff, Share2
+  History, Trash2, Dices, Copy, Search, Eye, Share2
 } from 'lucide-react';
 import { MODEL_OPTIONS } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
-import RefinementEditor from './RefinementEditor';
 import { motion, AnimatePresence } from 'motion/react';
-import ComparisonSlider from './ComparisonSlider';
-import MaskDrawEditor from './MaskDrawEditor';
 import AspectRatioSelector from './AspectRatioSelector';
+import ElapsedTimer from './ElapsedTimer';
+
+// Lazy-load heavy canvas/Konva editors so initial Studio load skips ~314KB Konva bundle
+const PhotoEditor = lazy(() => import('./PhotoEditor'));
+const RefinementEditor = lazy(() => import('./RefinementEditor'));
+const ComparisonSlider = lazy(() => import('./ComparisonSlider'));
+const MaskDrawEditor = lazy(() => import('./MaskDrawEditor'));
 
 const REF_LIB_KEY = 'yody_ref_library_v1';
 
@@ -47,9 +51,8 @@ const ImageEditor: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState(false);
   const [isComparing, setIsComparing] = useState(false);
   const [beforeUpscaleImage, setBeforeUpscaleImage] = useState<string | null>(null);
-  const [sliderPosition, setSliderPosition] = useState(50);
   const [isEditing, setIsEditing] = useState(false);
-  const [timer, setTimer] = useState(0);
+  const [visibleHistoryCount, setVisibleHistoryCount] = useState(20);
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
     return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
   });
@@ -75,12 +78,10 @@ const ImageEditor: React.FC = () => {
   const [cfgScale, setCfgScale] = useState<number>(7);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isDraggingRef, setIsDraggingRef] = useState(false);
-  const [showComparison, setShowComparison] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("ĐANG KHỞI TẠO...");
 
   const modelInputRef = useRef<HTMLInputElement>(null);
   const refInputRef = useRef<HTMLInputElement>(null);
-  const comparisonRef = useRef<HTMLDivElement>(null);
   const isLoadedRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -158,32 +159,33 @@ const ImageEditor: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewImage]);
 
-  useEffect(() => {
-    let interval: any;
-    if (isLoading || isSmoothing || isUpscaling) interval = setInterval(() => setTimer(t => t + 0.1), 100);
-    else setTimer(0);
-    return () => clearInterval(interval);
-  }, [isLoading, isSmoothing, isUpscaling]);
-
-  // UX Improvement: Dynamic Status Messages based on Timer and Resolution
+  // UX Improvement: Dynamic Status Messages (checked once per second instead of 10x/sec full re-render)
   useEffect(() => {
     if (!isLoading) return;
+    if (isFlowModel(selectedModelId) || isMuseModel(selectedModelId)) return;
 
-    if (imageSize === '4K') {
-        if (timer < 5) setLoadingMessage("KẾT NỐI SERVER 4K...");
-        else if (timer < 15) setLoadingMessage("PHÁC THẢO BỐ CỤC...");
-        else if (timer < 30) setLoadingMessage("XỬ LÝ ÁNH SÁNG & TEXTURE...");
-        else if (timer < 45) setLoadingMessage("TỐI ƯU HÓA ĐỘ PHÂN GIẢI...");
+    const start = performance.now();
+    const updatePhase = () => {
+      const elapsedSec = (performance.now() - start) / 1000;
+      if (imageSize === '4K') {
+        if (elapsedSec < 5) setLoadingMessage("KẾT NỐI SERVER 4K...");
+        else if (elapsedSec < 15) setLoadingMessage("PHÁC THẢO BỐ CỤC...");
+        else if (elapsedSec < 30) setLoadingMessage("XỬ LÝ ÁNH SÁNG & TEXTURE...");
+        else if (elapsedSec < 45) setLoadingMessage("TỐI ƯU HÓA ĐỘ PHÂN GIẢI...");
         else setLoadingMessage("HOÀN THIỆN CHI TIẾT CUỐI...");
-    } else if (imageSize === '2K') {
-        if (timer < 5) setLoadingMessage("KẾT NỐI SERVER...");
-        else if (timer < 15) setLoadingMessage("ĐANG VẼ CHI TIẾT...");
+      } else if (imageSize === '2K') {
+        if (elapsedSec < 5) setLoadingMessage("KẾT NỐI SERVER...");
+        else if (elapsedSec < 15) setLoadingMessage("ĐANG VẼ CHI TIẾT...");
         else setLoadingMessage("ĐANG HOÀN THIỆN...");
-    } else {
-         if (timer < 3) setLoadingMessage("ĐANG TẠO...");
-         else setLoadingMessage("ĐANG XỬ LÝ...");
-    }
-  }, [timer, isLoading, imageSize]);
+      } else {
+        if (elapsedSec < 3) setLoadingMessage("ĐANG TẠO...");
+        else setLoadingMessage("ĐANG XỬ LÝ...");
+      }
+    };
+
+    const interval = window.setInterval(updatePhase, 1000);
+    return () => window.clearInterval(interval);
+  }, [isLoading, imageSize, selectedModelId]);
 
   useEffect(() => {
     if (previewImage) { setZoom(1); setPan({ x: 0, y: 0 }); }
@@ -246,6 +248,8 @@ const ImageEditor: React.FC = () => {
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
         if (!isLoadedRef.current) return;
+        // Bỏ qua nếu tab đang ẩn để tránh tranh chấp sự kiện paste giữa nhiều tab
+        if (!containerRef.current || containerRef.current.offsetParent === null) return;
         const items = e.clipboardData?.items;
         if (!items) return;
         const files: File[] = [];
@@ -372,11 +376,45 @@ const ImageEditor: React.FC = () => {
     setIsLoading(true);
     setLoadingMessage("Đang phân tích yêu cầu...");
     setError(null);
-    setTimer(0);
     
     if (window.innerWidth < 1024) setShowConfig(false);
 
     try {
+      // ── Muse AI path ──────────────────────────────────────────────
+      if (isMuseModel(effectiveModelId)) {
+        setLoadingMessage("Đang gửi yêu cầu tạo ảnh tới Muse.ai...");
+        const activeRef = modelImage || (refImages.length > 0 ? refImages[0] : undefined);
+        let refPayload: string | undefined = undefined;
+        if (activeRef) {
+          refPayload = activeRef.startsWith('data:') ? activeRef : `data:image/jpeg;base64,${activeRef}`;
+        }
+        const musePrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao, ánh sáng studio nghệ thuật';
+        const museResult = await generateImageViaMuse(
+          {
+            prompt: musePrompt,
+            aspectRatio,
+            model: effectiveModelId,
+            referenceImage: refPayload,
+          },
+          (progress, message) => {
+            setLoadingMessage(message || `Muse AI (${progress}%)`);
+          }
+        );
+
+        if (museResult) {
+          playSuccessSound();
+          setResultImage(museResult);
+          addToHistory({
+            url: museResult,
+            prompt: musePrompt,
+            mode: 'IMAGE_EDITOR'
+          });
+          return;
+        } else {
+          throw new Error("Muse không trả về ảnh.");
+        }
+      }
+
       // ── Google Flow path (với tính năng tự động chuyển tiếp thông minh cho Web) ─────────────
       if (effectiveUsingFlow) {
         let isLocalFlowActive = false;
@@ -393,7 +431,7 @@ const ImageEditor: React.FC = () => {
             await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
             for (let i = 0; i < 7; i++) {
               await new Promise(r => setTimeout(r, 1000));
-              isLocalFlowActive = await isFlowBackendAvailable();
+              isLocalFlowActive = await isFlowBackendAvailable(true);
               if (isLocalFlowActive) break;
             }
           } catch {
@@ -532,7 +570,6 @@ const ImageEditor: React.FC = () => {
     setIsLoading(true);
     setIsRefining(false);
     setLoadingMessage("Đang tinh chỉnh vùng chọn...");
-    setTimer(0);
     
     try {
       const result = await geminiService.refineImage(resultImage, maskBase64, refinePrompt, {
@@ -583,10 +620,6 @@ const ImageEditor: React.FC = () => {
     });
   };
 
-  const addToLibrary = (base64: string) => {
-    addBatchToLibrary([base64]);
-  };
-
   const removeFromLibrary = (img: string) => {
     setRefLibrary(prev => {
       const newLib = prev.filter(i => i !== img);
@@ -631,13 +664,6 @@ const ImageEditor: React.FC = () => {
 
   const endDrag = () => setIsDraggingPreview(false);
 
-  const handleSliderMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!comparisonRef.current) return;
-    const rect = comparisonRef.current.getBoundingClientRect();
-    const xPos = ('touches' in e) ? e.touches[0].clientX - rect.left : (e as React.MouseEvent).clientX - rect.left;
-    setSliderPosition(Math.max(0, Math.min(100, (xPos / rect.width) * 100)));
-  };
-
   const handleSmooth = async () => {
     if (!resultImage || isSmoothing) return;
     setIsSmoothing(true);
@@ -645,7 +671,7 @@ const ImageEditor: React.FC = () => {
         try {
             const smoothed = await smoothImage(resultImage);
             setResultImage(smoothed);
-        } catch (e) {
+        } catch {
             setError("Lỗi khi làm mịn ảnh.");
         } finally {
             setIsSmoothing(false);
@@ -672,7 +698,6 @@ const ImageEditor: React.FC = () => {
     if (!resultImage || isGeneratingVariation) return;
     setIsGeneratingVariation(true);
     setLoadingMessage("Đang tạo biến thể...");
-    setTimer(0);
     setIsLoading(true);
     try {
         const variation = await geminiService.generateVariation(resultImage, {
@@ -714,7 +739,14 @@ const ImageEditor: React.FC = () => {
     }
   };
 
-  const editorHistory = history.filter(item => item.mode === 'IMAGE_EDITOR');
+  const editorHistory = useMemo(
+    () => history.filter(item => item.mode === 'IMAGE_EDITOR'),
+    [history]
+  );
+  const visibleEditorHistory = useMemo(
+    () => editorHistory.slice(0, visibleHistoryCount),
+    [editorHistory, visibleHistoryCount]
+  );
 
   return (
     <div ref={containerRef} className="h-full w-full flex flex-col p-2 md:p-3 overflow-hidden relative outline-none" tabIndex={0}>
@@ -733,7 +765,7 @@ const ImageEditor: React.FC = () => {
       <div className="flex-1 flex flex-col lg:flex-row gap-2 md:gap-3 overflow-hidden">
         {/* Controls Column */}
         <div className={`w-full lg:w-[380px] flex flex-col gap-2 md:gap-3 transition-all duration-300 shrink-0 order-2 lg:order-1 ${showConfig ? 'h-auto max-h-[70vh] lg:max-h-none lg:h-full' : 'h-auto'}`}>
-            <div className="bg-white/95 dark:bg-[#0f1115]/95 backdrop-blur-2xl p-4 md:p-6 rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col flex-1 overflow-hidden">
+            <div className="bg-white/95 dark:bg-[#0f1115]/95 p-4 md:p-6 rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col flex-1 overflow-hidden isolated-panel">
                 <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-6 mb-4">
                         {/* CHẤT LƯỢNG XỬ LÝ */}
                         <ModelSelector selectedModelId={selectedModelId} onModelSelect={handleModelSelect} />
@@ -922,8 +954,8 @@ const ImageEditor: React.FC = () => {
                                     ) : (
                                         <div className="grid grid-cols-4 gap-2 max-h-[200px] overflow-y-auto no-scrollbar">
                                             {refLibrary.map((img, idx) => (
-                                                <div key={idx} className="relative aspect-square rounded-xl overflow-hidden cursor-pointer group" onClick={() => toggleFromLib(img)}>
-                                                    <img src={formatImageSrc(img)} className={`w-full h-full object-cover transition-all ${refImages.includes(img) ? 'opacity-50' : ''}`} alt={`Thư viện ${idx + 1}`} />
+                                                <div key={idx} className="cv-thumb relative aspect-square rounded-xl overflow-hidden cursor-pointer group" onClick={() => toggleFromLib(img)}>
+                                                    <img src={formatImageSrc(img)} loading="lazy" decoding="async" className={`w-full h-full object-cover transition-all ${refImages.includes(img) ? 'opacity-50' : ''}`} alt={`Thư viện ${idx + 1}`} />
                                                     {refImages.includes(img) && <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20"><Check className="w-4 h-4 text-white" /></div>}
                                                     <button onClick={(e) => { e.stopPropagation(); removeFromLibrary(img); }} className="absolute top-0.5 right-0.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"><X className="w-2 h-2" /></button>
                                                 </div>
@@ -1044,7 +1076,15 @@ const ImageEditor: React.FC = () => {
                         {/* Generate Button */}
                         <button onClick={handleGenerate} disabled={isLoading} className="w-full py-5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-[2.5rem] font-black uppercase tracking-[0.25em] text-xs shadow-2xl hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-3">
                             {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5 fill-current text-amber-400" />}
-                            <span>{isLoading ? `${loadingMessage} (${timer.toFixed(1)}s)` : "TẠO ẢNH NGAY"}</span>
+                            <span>
+                              {isLoading ? (
+                                <>
+                                  {loadingMessage} (<ElapsedTimer active={isLoading} />)
+                                </>
+                              ) : (
+                                "TẠO ẢNH NGAY"
+                              )}
+                            </span>
                         </button>
                         
                         {error && (
@@ -1116,9 +1156,9 @@ const ImageEditor: React.FC = () => {
                     </div>
                 </div>
             </div>
-                {/* Preview Area */}
+        {/* Preview Area */}
         <div className="flex-1 flex flex-col overflow-hidden order-1 lg:order-2">
-             <div className="flex-1 bg-black/20 backdrop-blur-3xl rounded-[2.5rem] md:rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/10 flex items-center justify-center p-2 md:p-6 ring-1 ring-inset ring-white/10 min-h-0">
+             <div className="flex-1 bg-black/25 rounded-[2.5rem] md:rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/10 flex items-center justify-center p-2 md:p-6 ring-1 ring-inset ring-white/10 min-h-0 isolated-panel">
                  <AnimatePresence mode="wait">
                  {isLoading ? (
                     <motion.div 
@@ -1135,7 +1175,9 @@ const ImageEditor: React.FC = () => {
                             </div>
                         </div>
                         <p className="text-blue-500 text-[10px] font-black uppercase tracking-[0.3em] animate-pulse">{loadingMessage}</p>
-                        <p className="text-slate-500 text-[8px] font-bold uppercase tracking-widest mt-2">Thời gian: {timer.toFixed(1)}s</p>
+                        <p className="text-slate-500 text-[8px] font-bold uppercase tracking-widest mt-2">
+                          Thời gian: <ElapsedTimer active={isLoading} />
+                        </p>
                     </motion.div>
                  ) : resultImage ? (
                     <motion.div 
@@ -1146,11 +1188,13 @@ const ImageEditor: React.FC = () => {
                     >
                         <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-[2rem]">
                             {isComparing && (modelImage || beforeUpscaleImage) ? (
-                                <ComparisonSlider 
-                                    beforeImage={formatImageSrc(beforeUpscaleImage || modelImage)}
-                                    afterImage={formatImageSrc(resultImage)}
-                                    className="w-full h-full max-h-full aspect-square overflow-hidden rounded-[2rem] border border-white/10 shadow-2xl"
-                                />
+                                <Suspense fallback={<Loader2 className="w-8 h-8 animate-spin text-blue-500" />}>
+                                  <ComparisonSlider 
+                                      beforeImage={formatImageSrc(beforeUpscaleImage || modelImage)}
+                                      afterImage={formatImageSrc(resultImage)}
+                                      className="w-full h-full max-h-full aspect-square overflow-hidden rounded-[2rem] border border-white/10 shadow-2xl"
+                                  />
+                                </Suspense>
                             ) : (
                                 <img 
                                     src={formatImageSrc(resultImage)} 
@@ -1262,7 +1306,7 @@ const ImageEditor: React.FC = () => {
 
         {/* History Column (Right) */}
         <div className="w-full lg:w-[220px] flex flex-col gap-2 md:gap-3 shrink-0 order-3">
-            <div className="bg-white/95 dark:bg-[#0f1115]/95 backdrop-blur-2xl p-4 md:p-6 rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col h-full overflow-hidden">
+            <div className="bg-white/95 dark:bg-[#0f1115]/95 p-4 md:p-6 rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col h-full overflow-hidden isolated-panel">
                 <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-2">
                         <History className="w-3.5 h-3.5 text-blue-500" />
@@ -1286,10 +1330,12 @@ const ImageEditor: React.FC = () => {
                         </div>
                     ) : (
                         <div className="flex flex-col gap-3 pb-10">
-                            {editorHistory.map((item) => (
-                                <div key={item.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 dark:border-white/10 shadow-sm transition-all hover:ring-2 hover:ring-blue-500/50">
+                            {visibleEditorHistory.map((item) => (
+                                <div key={item.id} className="cv-thumb relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 dark:border-white/10 shadow-sm transition-all hover:ring-2 hover:ring-blue-500/50">
                                     <img 
-                                        src={formatImageSrc(item.url)} 
+                                        src={item.thumbnailUrl || formatImageSrc(item.url)} 
+                                        loading="lazy"
+                                        decoding="async"
                                         className="w-full h-full object-cover cursor-pointer transition-transform group-hover:scale-110" 
                                         onClick={() => {
                                             setResultImage(item.url);
@@ -1301,13 +1347,22 @@ const ImageEditor: React.FC = () => {
                                         <Plus className="w-5 h-5 text-white" />
                                     </div>
                                     <button 
-                                        onClick={() => removeFromHistory(item.id)}
+                                        onClick={() => item.id && removeFromHistory(item.id)}
                                         className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110 active:scale-90"
                                     >
                                         <X size={10} />
                                     </button>
                                 </div>
                             ))}
+                            {editorHistory.length > visibleHistoryCount && (
+                                <button
+                                    type="button"
+                                    onClick={() => setVisibleHistoryCount((c) => c + 20)}
+                                    className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-white/10 transition-colors"
+                                >
+                                    Xem thêm ({editorHistory.length - visibleHistoryCount})
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1316,12 +1371,14 @@ const ImageEditor: React.FC = () => {
       </div>
 
       {isRefining && resultImage && (
-        <RefinementEditor 
-          image={formatImageSrc(resultImage)}
-          onClose={() => setIsRefining(false)}
-          onSave={handleRefineSave}
-          isProcessing={isLoading}
-        />
+        <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>}>
+          <RefinementEditor 
+            image={formatImageSrc(resultImage)}
+            onClose={() => setIsRefining(false)}
+            onSave={handleRefineSave}
+            isProcessing={isLoading}
+          />
+        </Suspense>
       )}
 
       {previewImage && (
@@ -1378,19 +1435,23 @@ const ImageEditor: React.FC = () => {
       )}
 
       {isEditing && resultImage && (
-          <PhotoEditor 
-              imageSrc={formatImageSrc(resultImage)}
-              onSave={(edited) => { setResultImage(edited); setIsEditing(false); }}
-              onClose={() => setIsEditing(false)}
-          />
+          <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>}>
+            <PhotoEditor 
+                imageSrc={formatImageSrc(resultImage)}
+                onSave={(edited) => { setResultImage(edited); setIsEditing(false); }}
+                onClose={() => setIsEditing(false)}
+            />
+          </Suspense>
       )}
 
       {showMaskEditor && modelImage && (
-          <MaskDrawEditor 
-              imageSrc={modelImage}
-              onSave={(maskStr) => { setMaskImage(maskStr); setShowMaskEditor(false); }}
-              onCancel={() => setShowMaskEditor(false)}
-          />
+          <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>}>
+            <MaskDrawEditor 
+                imageSrc={modelImage}
+                onSave={(maskStr) => { setMaskImage(maskStr); setShowMaskEditor(false); }}
+                onCancel={() => setShowMaskEditor(false)}
+            />
+          </Suspense>
       )}
 
       <style>{`

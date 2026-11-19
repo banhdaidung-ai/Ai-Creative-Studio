@@ -1,17 +1,21 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
 import { geminiService, MODEL_OPTIONS } from '../services/gemini';
+import { generateImageViaFlow, isFlowModel, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
+import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
-import { resizeImage, extractRatioFromPrompt } from '../utils/image';
+import { resizeImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
-import PhotoEditor from './PhotoEditor';
 import { useProject } from '../contexts/ProjectContext';
+import ElapsedTimer from './ElapsedTimer';
 import { 
   Shirt, Sliders, RefreshCw, Maximize2, X, Loader2, Layers, 
-  CheckSquare, Square, Box, Columns, Eye, ZoomIn, ZoomOut, ChevronDown, Settings2, ChevronUp, Crown,
+  CheckSquare, Square, Box, Columns, Eye, ZoomIn, ZoomOut, ChevronDown, Settings2, ChevronUp,
   Plus, MessageSquare, DownloadCloud, Trash2, Zap, Image as ImageIcon, Sparkles
 } from 'lucide-react';
+
+const PhotoEditor = lazy(() => import('./PhotoEditor'));
 
 interface GarmentJob {
   id: string;
@@ -22,15 +26,7 @@ interface GarmentJob {
   prompt: string;
 }
 
-interface BatchHistoryItem {
-  id: string;
-  timestamp: number;
-  modelImage: string;
-  garmentImage: string;
-  resultBase64: string;
-  prompt: string;
-  aspectRatio: string;
-}
+const SETTINGS_STORAGE_KEY = 'yody_batch_studio_settings_v2';
 
 const PROMPT_SUGGESTIONS = [
   { id: 'default', label: 'Mặc định', text: "Replace the model's outfit with this garment. Maintain photorealism and lighting." },
@@ -63,7 +59,7 @@ const LazyImage: React.FC<{ src: string; className?: string; alt?: string }> = (
   return (
     <div ref={ref} className={`relative overflow-hidden ${className?.includes('w-full') ? 'w-full' : ''} ${className?.includes('h-full') ? 'h-full' : ''}`}>
       {inView ? (
-        <img src={src} className={`${className} animate-in fade-in duration-300`} alt={alt} loading="lazy" />
+        <img src={src} className={`${className} animate-in fade-in duration-300`} alt={alt} loading="lazy" decoding="async" />
       ) : (
         <div className="w-full h-full bg-white/5 animate-pulse" />
       )}
@@ -81,10 +77,6 @@ const BatchFashionStudio: React.FC = () => {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [isDraggingModel, setIsDraggingModel] = useState(false);
   const [isDraggingGarment, setIsDraggingGarment] = useState(false);
-  
-  const [history, setHistory] = useState<BatchHistoryItem[]>([]);
-
-  const [timer, setTimer] = useState(0);
 
   const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
   const [imageSize, setImageSize] = useState('1K');
@@ -117,6 +109,7 @@ const BatchFashionStudio: React.FC = () => {
   
   const modelInputRef = useRef<HTMLInputElement>(null);
   const garmentInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const isLoadedRef = useRef(false);
 
   const getClosestRatio = (width: number, height: number): string => {
@@ -168,6 +161,20 @@ const BatchFashionStudio: React.FC = () => {
   useEffect(() => {
     const initData = async () => {
         try {
+            // Load lightweight settings from localStorage first
+            try {
+                const rawSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
+                if (rawSettings) {
+                    const s = JSON.parse(rawSettings);
+                    if (s.defaultPrompt) setDefaultPrompt(s.defaultPrompt);
+                    if (s.selectedModelId) setSelectedModelId(s.selectedModelId);
+                    if (s.imageSize) setImageSize(s.imageSize);
+                    if (s.aspectRatio) setAspectRatio(s.aspectRatio);
+                }
+            } catch {
+                // Ignore malformed settings
+            }
+
             const savedState = await loadState(STORAGE_KEY) as any;
             if (savedState) {
                 if (savedState.modelImage) setModelImage(savedState.modelImage);
@@ -179,10 +186,11 @@ const BatchFashionStudio: React.FC = () => {
                     setJobs(restoredJobs);
                 }
                 if (savedState.defaultPrompt) setDefaultPrompt(savedState.defaultPrompt);
-                if (savedState.selectedModelId) setSelectedModelId(savedState.selectedModelId);
+                if (savedState.selectedModelId || savedState.modelId) {
+                    setSelectedModelId(savedState.selectedModelId || savedState.modelId);
+                }
                 if (savedState.imageSize) setImageSize(savedState.imageSize);
                 if (savedState.aspectRatio) setAspectRatio(savedState.aspectRatio);
-                if (savedState.history) setHistory(savedState.history);
             }
         } catch (e) {
             console.warn("Failed to load batch studio state", e);
@@ -193,26 +201,38 @@ const BatchFashionStudio: React.FC = () => {
     initData();
   }, []);
 
+  // Save lightweight text/model settings separately in localStorage (instant, zero image serialization)
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    const timeoutId = setTimeout(async () => {
+    const timeoutId = window.setTimeout(() => {
+      try {
+        localStorage.setItem(
+          SETTINGS_STORAGE_KEY,
+          JSON.stringify({ defaultPrompt, selectedModelId, imageSize, aspectRatio })
+        );
+      } catch {
+        // Ignore quota error
+      }
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [defaultPrompt, selectedModelId, imageSize, aspectRatio]);
+
+  // Only persist heavy image jobs to IndexedDB when modelImage or jobs actually change
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
+    const timeoutId = window.setTimeout(async () => {
       try {
         const stateToSave = {
           modelImage,
-          jobs,
-          defaultPrompt,
-          modelId: selectedModelId,
-          imageSize,
-          aspectRatio,
-          history: history.slice(0, 50) 
+          jobs: jobs.slice(0, 24),
         };
         await saveState(STORAGE_KEY, stateToSave);
       } catch {
         // Ignore error
       }
-    }, 1000); 
-    return () => clearTimeout(timeoutId);
-  }, [modelImage, jobs, defaultPrompt, selectedModelId, imageSize, aspectRatio, history]);
+    }, 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [modelImage, jobs]);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -253,17 +273,6 @@ const BatchFashionStudio: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    let interval: any;
-    const isAnyProcessing = isProcessing || jobs.some(j => j.status === 'processing');
-    if (isAnyProcessing) {
-      interval = setInterval(() => setTimer(t => t + 0.1), 100);
-    } else {
-      setTimer(0);
-    }
-    return () => clearInterval(interval);
-  }, [isProcessing, jobs]);
-
-  useEffect(() => {
     if (previewImage) {
         setZoom(1);
         setPan({ x: 0, y: 0 });
@@ -272,9 +281,12 @@ const BatchFashionStudio: React.FC = () => {
     }
   }, [previewImage]);
 
-  // Global Paste Handler
+  // Global Paste Handler (only active when this tab is visible)
   useEffect(() => {
     const handleGlobalPaste = async (e: ClipboardEvent) => {
+        if (!containerRef.current || containerRef.current.offsetParent === null) return;
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
         const items = e.clipboardData?.items;
         if (!items) return;
         const files: File[] = [];
@@ -350,70 +362,117 @@ const BatchFashionStudio: React.FC = () => {
     const job = jobsRef.current.find(j => j.id === jobId);
     if (!job || !modelImage) return;
 
-    if (MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
+    const usingFlow = isFlowModel(selectedModelId);
+    const usingMuse = isMuseModel(selectedModelId);
+
+    if (!usingFlow && !usingMuse && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
         handleSelectKey();
         return;
     }
 
     setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'processing', statusMessage: 'Đang khởi tạo...' } : j));
+    const statusTimers: ReturnType<typeof setTimeout>[] = [];
+
+    const statusUpdate = (msg: string) => {
+        setJobs(prev => prev.map(j => j.id === jobId ? { ...j, statusMessage: msg } : j));
+    };
 
     try {
-        // Simulate status updates for better UX
-        const statusUpdate = (msg: string) => {
-            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, statusMessage: msg } : j));
-        };
+        let result: string | undefined;
 
-        setTimeout(() => statusUpdate('Đang phân tích trang phục...'), 1500);
-        setTimeout(() => statusUpdate('Đang ghép vào người mẫu...'), 3500);
-        setTimeout(() => statusUpdate('Đang xử lý ánh sáng...'), 6000);
+        if (usingMuse) {
+            statusUpdate('Đang gửi yêu cầu thay đồ tới Muse AI...');
+            const musePrompt = `${job.prompt}. Virtual try-on fashion photography: dress the model in the outfit seamlessly with realistic fabric drape, natural studio lighting, sharp facial identity.`;
+            const museUrl = await generateImageViaMuse(
+                {
+                    prompt: musePrompt,
+                    aspectRatio,
+                    model: selectedModelId,
+                    referenceImage: formatImageSrc(modelImage),
+                },
+                (prog, msg) => statusUpdate(msg || `Muse AI (${prog}%)`)
+            );
+            result = museUrl;
+        } else if (usingFlow) {
+            const flowReady = await isFlowBackendAvailable().catch(() => false);
+            if (flowReady) {
+                statusUpdate('Đang gửi yêu cầu thay đồ tới Google Flow...');
+                result = await generateImageViaFlow(
+                    {
+                        prompt: job.prompt,
+                        aspectRatio,
+                        numImages: 1,
+                        model: selectedModelId,
+                        modelImageBase64: modelImage,
+                        modelImageMime: modelImage.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+                        referenceImagesBase64: [job.garmentBase64],
+                        referenceImageBase64: job.garmentBase64,
+                        referenceImageMime: job.garmentBase64.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg',
+                    },
+                    (prog, msg) => statusUpdate(msg || `Google Flow (${prog}%)`)
+                );
+            } else if (apiKeySelected) {
+                const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+                toast.info(`Google Flow chưa bật, tự động dùng ${fallbackModel}...`);
+                result = await geminiService.editImage(
+                    modelImage,
+                    job.prompt,
+                    [job.garmentBase64],
+                    { modelId: fallbackModel, aspectRatio, imageSize }
+                );
+            } else {
+                throw new Error('Google Flow Backend chưa sẵn sàng. Vui lòng bật backend hoặc nhập Gemini API Key.');
+            }
+        } else {
+            statusTimers.push(setTimeout(() => statusUpdate('Đang phân tích trang phục...'), 1500));
+            statusTimers.push(setTimeout(() => statusUpdate('Đang ghép vào người mẫu...'), 3500));
+            statusTimers.push(setTimeout(() => statusUpdate('Đang xử lý ánh sáng...'), 6000));
 
-        const result = await geminiService.editImage(
-            modelImage,
-            job.prompt, 
-            [job.garmentBase64],
-            { modelId: selectedModelId, aspectRatio, imageSize }
-        );
+            result = await geminiService.editImage(
+                modelImage,
+                job.prompt, 
+                [job.garmentBase64],
+                { modelId: selectedModelId, aspectRatio, imageSize }
+            );
+        }
+
+        statusTimers.forEach(clearTimeout);
 
         if (result) {
-            statusUpdate('Đang kiểm duyệt chất lượng...');
-            const review = await geminiService.reviewImage(result);
-            if (!review.pass) {
-                setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', statusMessage: review.reason || 'Lỗi AI' } : j));
-                return;
+            // Chỉ chạy AI review tự động khi dùng Gemini API trả về base64 trực tiếp
+            if (!usingFlow && !usingMuse) {
+                statusUpdate('Đang kiểm duyệt chất lượng...');
+                const review = await geminiService.reviewImage(result);
+                if (!review.pass) {
+                    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', statusMessage: review.reason || 'Lỗi AI' } : j));
+                    return;
+                }
             }
 
             setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'completed', resultBase64: result } : j));
             setSelectedJobs(prev => new Set(prev).add(jobId));
             
-            const historyItem: BatchHistoryItem = {
-              id: Date.now().toString() + Math.random().toString().slice(2),
-              timestamp: Date.now(),
-              modelImage: modelImage,
-              garmentImage: job.garmentBase64,
-              resultBase64: result,
-              prompt: job.prompt,
-              aspectRatio: aspectRatio
-            };
-            setHistory(prev => [historyItem, ...prev]);
-            
             // Add to global history
             addToHistory({
-              url: `data:image/png;base64,${result}`,
+              url: formatImageSrc(result),
               prompt: job.prompt,
               mode: 'BATCH_FASHION'
             });
         } else {
-            throw new Error("No result");
+            throw new Error("Không nhận được ảnh kết quả từ AI.");
         }
-    } catch (err) {
-        setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error' } : j));
+    } catch (err: any) {
+        statusTimers.forEach(clearTimeout);
+        setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', statusMessage: err?.message || 'Lỗi tạo ảnh' } : j));
+        toast.error(err?.message || 'Thay đồ thất bại.');
     }
   };
 
   const generateAll = async () => {
     if (!modelImage) return;
+    const usingLocalEngine = isFlowModel(selectedModelId) || isMuseModel(selectedModelId);
     const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
-    if (selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
+    if (!usingLocalEngine && selectedModel?.tier === 'pro' && !apiKeySelected) { handleSelectKey(); return; }
     setIsProcessing(true);
     if (window.innerWidth < 1024) setShowConfig(false);
     const pendingIds = jobs.filter(j => j.status === 'pending' || j.status === 'error').map(j => j.id);
@@ -454,7 +513,7 @@ const BatchFashionStudio: React.FC = () => {
       jobs.filter(j => selectedJobs.has(j.id) && j.resultBase64).forEach((job, index) => {
           setTimeout(() => {
               const link = document.createElement('a');
-              link.href = `data:image/png;base64,${job.resultBase64}`;
+              link.href = formatImageSrc(job.resultBase64);
               link.download = `yody-outfit-${job.id}.png`;
               link.click();
           }, index * 400);
@@ -546,7 +605,7 @@ const BatchFashionStudio: React.FC = () => {
   };
 
   return (
-    <div className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden">
+    <div ref={containerRef} className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden">
       <div className="mb-2 md:mb-4 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 md:p-2.5 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 shadow-lg shadow-purple-500/30">
@@ -562,7 +621,7 @@ const BatchFashionStudio: React.FC = () => {
       <div className="flex-1 flex flex-col lg:flex-row gap-3 md:gap-4 overflow-hidden">
         {/* Sidebar Controls */}
         <div className={`w-full lg:w-[320px] flex flex-col gap-3 lg:gap-4 transition-all duration-300 shrink-0 order-1 ${showConfig ? 'h-auto max-h-[55vh] lg:max-h-full lg:h-full' : 'h-auto'}`}>
-          <div className="bg-white/10 dark:bg-white/5 backdrop-blur-2xl p-3 md:p-4 rounded-[1.5rem] lg:rounded-[2.5rem] border border-white/20 dark:border-white/10 shadow-2xl flex flex-col gap-3 md:gap-5 flex-1 ring-1 ring-inset ring-white/10 overflow-hidden">
+          <div className="bg-white/95 dark:bg-[#0f1115]/95 p-3 md:p-4 rounded-[1.5rem] lg:rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col gap-3 md:gap-5 flex-1 ring-1 ring-inset ring-white/10 overflow-hidden isolated-panel">
             {/* Mobile Header */}
             <div className="flex items-center justify-between lg:hidden p-1" onClick={() => setShowConfig(!showConfig)}>
                 <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
@@ -725,7 +784,7 @@ const BatchFashionStudio: React.FC = () => {
             </div>
             <button onClick={generateAll} disabled={!modelImage || isProcessing || jobs.length === 0} className="w-full py-3 md:py-4 rounded-[1.2rem] lg:rounded-[1.5rem] font-black text-white flex items-center justify-center gap-3 bg-gradient-to-r from-purple-600 to-pink-600 shadow-xl shadow-purple-500/30 uppercase tracking-[0.2em] text-[10px] md:text-xs relative overflow-hidden group hover:scale-[1.02] active:scale-[0.98] transition-all">
                 <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current" />} <span>{isProcessing ? `Đang xử lý (${timer.toFixed(1)}s)...` : "Thực hiện"}</span>
+                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current" />} <span>{isProcessing ? <>Đang xử lý (<ElapsedTimer active={isProcessing} />)...</> : "Thực hiện"}</span>
             </button>
           </div>
         </div>
@@ -733,7 +792,7 @@ const BatchFashionStudio: React.FC = () => {
         {/* Main Grid View */}
         <div className="flex-1 flex flex-col overflow-hidden order-2 lg:order-2 relative">
             {/* ... (Keep existing results view logic) ... */}
-            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/5 backdrop-blur-3xl p-2 md:p-3 rounded-2xl border border-white/10 shadow-lg shrink-0">
+            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
                  <div className="flex items-center gap-2 md:gap-3">
                     <span className="text-[9px] md:text-[10px] font-black uppercase text-slate-900 dark:text-white tracking-widest pl-2">
                         Kết quả ({jobs.filter(j => j.status === 'completed').length})
@@ -749,7 +808,7 @@ const BatchFashionStudio: React.FC = () => {
                 </button>
             </div>
 
-            <div className="flex-1 bg-black/20 backdrop-blur-3xl rounded-[1.5rem] lg:rounded-[3rem] relative overflow-hidden shadow-2xl border border-white/10 ring-1 ring-inset ring-white/10 flex flex-col min-h-0">
+            <div className="flex-1 bg-black/25 rounded-[1.5rem] lg:rounded-[3rem] relative overflow-hidden shadow-2xl border border-white/10 ring-1 ring-inset ring-white/10 flex flex-col min-h-0 isolated-panel">
                 <div className="flex-1 overflow-y-auto no-scrollbar p-3 md:p-4 pb-20 md:pb-24">
                     {jobs.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center opacity-30 select-none">
@@ -761,12 +820,12 @@ const BatchFashionStudio: React.FC = () => {
                     ) : (
                         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
                             {jobs.map((job) => (
-                                <div key={job.id} className={`group relative bg-white/5 backdrop-blur-2xl rounded-[1rem] md:rounded-[1.5rem] border border-white/10 overflow-hidden shadow-xl transition-all duration-500 hover:shadow-2xl hover:-translate-y-1 flex flex-col aspect-[3/4] ${selectedJobs.has(job.id) ? 'ring-2 ring-purple-400' : ''}`}>
+                                <div key={job.id} className={`cv-card group relative bg-white/5 rounded-[1rem] md:rounded-[1.5rem] border border-white/10 overflow-hidden shadow-xl transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 flex flex-col aspect-[3/4] ${selectedJobs.has(job.id) ? 'ring-2 ring-purple-400' : ''}`}>
                                     {job.status === 'completed' && job.resultBase64 ? (
                                         <>
-                                            <LazyImage src={`data:image/png;base64,${job.resultBase64}`} className="w-full h-full object-cover" />
+                                            <LazyImage src={formatImageSrc(job.resultBase64)} className="w-full h-full object-cover" />
                                             <div className="absolute top-2 left-2 w-8 h-8 md:w-12 md:h-12 rounded-lg border border-white/20 shadow-lg overflow-hidden bg-black/40 backdrop-blur-sm z-10 transition-transform group-hover:scale-110">
-                                                <LazyImage src={`data:image/png;base64,${job.garmentBase64}`} className="w-full h-full object-cover" />
+                                                <LazyImage src={formatImageSrc(job.garmentBase64)} className="w-full h-full object-cover" />
                                             </div>
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-2">
@@ -775,7 +834,7 @@ const BatchFashionStudio: React.FC = () => {
                                                         onClick={(e) => { 
                                                             e.stopPropagation(); 
                                                             addToWorkspace({
-                                                                url: `data:image/png;base64,${job.resultBase64}`,
+                                                                url: formatImageSrc(job.resultBase64),
                                                                 prompt: job.prompt,
                                                                 mode: 'BATCH_FASHION'
                                                             });
@@ -842,7 +901,7 @@ const BatchFashionStudio: React.FC = () => {
             >
                 {isComparing && modelImage ? (
                     <div ref={comparisonRef} className="relative w-full h-full max-h-[85vh] object-contain rounded-[1rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] border border-white/10 overflow-hidden cursor-col-resize select-none" style={{ aspectRatio: aspectRatio.replace(':', '/') }} onMouseMove={handleSliderMove} onTouchMove={handleSliderMove}>
-                        <img src={`data:image/png;base64,${previewImage}`} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                        <img src={formatImageSrc(previewImage)} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                         <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}><img src={`data:image/png;base64,${modelImage}`} className="absolute inset-0 w-full h-full object-contain" /></div>
                         <div className="absolute inset-y-0 w-1 bg-white/80 z-20 pointer-events-none" style={{ left: `${sliderPosition}%` }}><div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center shadow-2xl border-2 border-purple-900"><Columns className="w-4 h-4 text-purple-900" /></div></div>
                         
@@ -852,7 +911,7 @@ const BatchFashionStudio: React.FC = () => {
                     </div>
                 ) : (
                     <img 
-                        src={`data:image/png;base64,${previewImage}`} 
+                        src={formatImageSrc(previewImage)} 
                         className="max-w-full max-h-[85vh] object-contain rounded-[1rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] transition-transform duration-100 ease-out select-none"
                         style={{ 
                             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -875,11 +934,13 @@ const BatchFashionStudio: React.FC = () => {
 
       {/* Editor Modal */}
       {editingJobId && jobs.find(j => j.id === editingJobId)?.resultBase64 && (
-          <PhotoEditor 
-              imageSrc={jobs.find(j => j.id === editingJobId)!.resultBase64!}
-              onSave={handleSaveEdit}
-              onClose={() => setEditingJobId(null)}
-          />
+          <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>}>
+            <PhotoEditor 
+                imageSrc={jobs.find(j => j.id === editingJobId)!.resultBase64!}
+                onSave={handleSaveEdit}
+                onClose={() => setEditingJobId(null)}
+            />
+          </Suspense>
       )}
 
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; }`}</style>

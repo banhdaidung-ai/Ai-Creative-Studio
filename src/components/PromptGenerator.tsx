@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { geminiService } from '../services/gemini';
 import { Lightbulb, Upload, Wand2, Copy, Check, Loader2, AlertCircle, Sparkles } from 'lucide-react';
-import { fileToBase64, resizeImage } from '../utils/image';
+import { resizeImage } from '../utils/image';
 import { isFlowBackendAvailable, enhancePromptViaFlow } from '../services/flowService';
+import { getMuseReadyStatus, generateCreativePromptsViaMuse } from '../services/museService';
 
 interface CreativePrompt {
   title_vn: string;
@@ -21,7 +22,13 @@ const PromptGenerator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [apiKeySelected, setApiKeySelected] = useState(false);
+  const [promptEngine, setPromptEngine] = useState<'auto' | 'gemini' | 'muse' | 'flow'>('auto');
+  const [museReady, setMuseReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    getMuseReadyStatus().then((st) => setMuseReady(st.accounts > 0)).catch(() => setMuseReady(false));
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -97,7 +104,10 @@ const PromptGenerator: React.FC = () => {
       localStorage.getItem('vertex_project_id')
     );
     const flowReady = await isFlowBackendAvailable().catch(() => false);
-    if (!apiKeySelected && !hasPro && !flowReady) {
+    const museStatus = await getMuseReadyStatus().catch(() => ({ available: false, accounts: 0, status: 'offline', browser_running: false }));
+    const hasMuseAccount = museStatus.available && museStatus.accounts > 0;
+
+    if (!apiKeySelected && !hasPro && !flowReady && !hasMuseAccount) {
       handleSelectKey();
       return;
     }
@@ -107,20 +117,42 @@ const PromptGenerator: React.FC = () => {
     }
     setIsGenerating(true);
     setError(null);
+    const baseIdea = idea.trim() || 'high-end fashion commercial studio photography';
+
     try {
-      if (apiKeySelected || hasPro) {
+      // 1. Explicit Muse Spark selection
+      if (promptEngine === 'muse') {
+        const musePrompts = await generateCreativePromptsViaMuse(baseIdea);
+        setPrompts(musePrompts);
+        return;
+      }
+
+      // 2. Gemini (explicit or auto when key is active)
+      if (promptEngine === 'gemini' || (promptEngine === 'auto' && (apiKeySelected || hasPro))) {
         try {
           const result = await geminiService.generateCreativePrompts(idea, images);
           setPrompts(result);
           return;
         } catch (geminiErr: any) {
-          console.warn("[PromptGenerator] Gemini failed, attempting Flow fallback...", geminiErr);
-          if (!flowReady) throw geminiErr;
+          if (promptEngine === 'gemini') throw geminiErr;
+          console.warn("[PromptGenerator] Gemini failed, attempting Muse/Flow fallback...", geminiErr);
+          if (!hasMuseAccount && !flowReady) throw geminiErr;
         }
       }
 
-      // Google Flow prompt enhancement fallback
-      const baseIdea = idea.trim() || 'high-end fashion commercial studio photography';
+      // 3. Auto fallback to Muse Spark if account is ready
+      if (promptEngine === 'auto' && hasMuseAccount) {
+        try {
+          const musePrompts = await generateCreativePromptsViaMuse(baseIdea);
+          setPrompts(musePrompts);
+          return;
+        } catch (museErr) {
+          console.warn("[PromptGenerator] Muse Spark failed, attempting Flow fallback...", museErr);
+          if (!flowReady) throw museErr;
+        }
+      }
+
+      // 4. Google Flow prompt enhancement
       const enhanced = await enhancePromptViaFlow(baseIdea, 'image');
       setPrompts([
         {
@@ -172,6 +204,36 @@ const PromptGenerator: React.FC = () => {
           {/* Input Section */}
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-black/5 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-[2rem] p-6 space-y-6 shadow-xl">
+              {/* Engine Selector for Prompt Generation */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">
+                  AI Engine Gợi Ý
+                </label>
+                <div className="grid grid-cols-4 gap-1 p-1 bg-black/10 dark:bg-black/30 rounded-xl border border-slate-200 dark:border-white/10">
+                  {[
+                    { id: 'auto', label: 'Tự động' },
+                    { id: 'gemini', label: 'Gemini' },
+                    { id: 'muse', label: museReady ? 'Muse ✨' : 'Muse' },
+                    { id: 'flow', label: 'Flow' },
+                  ].map((eng) => (
+                    <button
+                      key={eng.id}
+                      type="button"
+                      onClick={() => setPromptEngine(eng.id as 'auto' | 'gemini' | 'muse' | 'flow')}
+                      className={`py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all ${
+                        promptEngine === eng.id
+                          ? eng.id === 'muse'
+                            ? 'bg-pink-600 text-white shadow'
+                            : 'bg-lime-500 text-black shadow'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                      }`}
+                    >
+                      {eng.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-3">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
                   <Sparkles className="w-3 h-3 text-lime-400" />

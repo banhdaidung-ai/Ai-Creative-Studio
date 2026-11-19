@@ -188,7 +188,7 @@ export async function ensureFlowBackendReady(
       // Chờ tối đa 8 giây để backend khởi động xong
       for (let i = 0; i < 8; i++) {
         await new Promise((r) => setTimeout(r, 1000));
-        isReady = await isFlowBackendAvailable();
+        isReady = await isFlowBackendAvailable(true);
         if (isReady) {
           if (onProgress) onProgress(12, 'Google Flow Backend đã sẵn sàng!');
           return true;
@@ -462,54 +462,95 @@ export async function enhancePromptViaFlow(prompt: string, mode: 'image' | 'vide
   }
 }
 
-// ── Backend Health Check ──────────────────────────────────────────────────────
+// ── Backend Health Check (Cached + Deduplicated + Parallel) ──────────────────
 
-export async function isFlowBackendAvailable(): Promise<boolean> {
-  // 1. Thử URL chính (theo getFlowApiUrl)
-  const primaryUrl = getFlowApiUrl('/health');
-  try {
-    const res = await fetch(primaryUrl, { signal: AbortSignal.timeout(2500) });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const data = await res.json().catch(() => null);
-      if (data?.status === 'ok') return true;
+const FLOW_HEALTH_TTL_ONLINE_MS = 30_000;
+const FLOW_HEALTH_TTL_OFFLINE_MS = 15_000;
+
+let cachedFlowStatus: { available: boolean; checkedAt: number } | null = null;
+let inFlightFlowCheck: Promise<boolean> | null = null;
+
+export function invalidateFlowHealthCache(): void {
+  cachedFlowStatus = null;
+  detectedWorkingBase = null;
+}
+
+async function probeFlowHealthUrl(url: string, timeoutMs: number): Promise<boolean> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const contentType = res.headers.get('content-type') || '';
+  if (res.ok && contentType.includes('application/json')) {
+    const data = await res.json().catch(() => null);
+    if (data?.status === 'ok') return true;
+  }
+  throw new Error('not-ok');
+}
+
+export async function isFlowBackendAvailable(forceRefresh = false): Promise<boolean> {
+  if (!forceRefresh && cachedFlowStatus) {
+    const ttl = cachedFlowStatus.available ? FLOW_HEALTH_TTL_ONLINE_MS : FLOW_HEALTH_TTL_OFFLINE_MS;
+    if (Date.now() - cachedFlowStatus.checkedAt < ttl) {
+      return cachedFlowStatus.available;
     }
-  } catch {
-    // Primary URL không phản hồi, tiếp tục thử fallback
   }
 
-  // 2. Fallback thông minh: thử direct port 8000 nếu đang ở LAN hoặc localhost
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    const candidates: string[] = [];
+  if (!forceRefresh && inFlightFlowCheck) {
+    return inFlightFlowCheck;
+  }
 
-    // Nếu đang ở máy khác cùng mạng LAN (ví dụ http://192.168.0.2:3000), thử kết nối trực tiếp đến port 8000 của Mac
-    if (isLanOrLocalHostname(hostname) && hostname !== 'localhost' && hostname !== '127.0.0.1') {
-      candidates.push(`http://${hostname}:8000`);
+  const runCheck = async (): Promise<boolean> => {
+    const primaryUrl = getFlowApiUrl('/health');
+
+    // 1. Thử URL chính nhanh trước (1.5s timeout)
+    try {
+      await probeFlowHealthUrl(primaryUrl, 1500);
+      cachedFlowStatus = { available: true, checkedAt: Date.now() };
+      return true;
+    } catch {
+      // Tiếp tục thử fallback song song nếu ở local/LAN
     }
-    candidates.push('http://127.0.0.1:8000');
-    candidates.push('http://localhost:8000');
 
-    for (const base of candidates) {
-      const testUrl = `${base}/health`;
-      if (testUrl === primaryUrl) continue;
-      try {
-        const res = await fetch(testUrl, { signal: AbortSignal.timeout(1500) });
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const data = await res.json().catch(() => null);
-          if (data?.status === 'ok') {
-            detectedWorkingBase = base;
-            return true;
-          }
+    // 2. Fallback song song (chỉ chạy thêm khi có ứng viên khác primaryUrl)
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      const isLocalOrLan = isLanOrLocalHostname(hostname);
+      const candidates: string[] = [];
+
+      if (isLocalOrLan) {
+        if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+          candidates.push(`http://${hostname}:8000`);
         }
-      } catch {
-        // Thử ứng viên tiếp theo
+        candidates.push('http://127.0.0.1:8000');
+      } else if (!primaryUrl.startsWith('http://127.0.0.1:8000')) {
+        candidates.push('http://127.0.0.1:8000');
+      }
+
+      const uniqueCandidates = candidates.filter((base) => `${base}/health` !== primaryUrl);
+      if (uniqueCandidates.length > 0) {
+        try {
+          const workingBase = await Promise.any(
+            uniqueCandidates.map(async (base) => {
+              await probeFlowHealthUrl(`${base}/health`, 1200);
+              return base;
+            })
+          );
+          detectedWorkingBase = workingBase;
+          cachedFlowStatus = { available: true, checkedAt: Date.now() };
+          return true;
+        } catch {
+          // Tất cả ứng viên đều không phản hồi
+        }
       }
     }
-  }
 
-  return false;
+    cachedFlowStatus = { available: false, checkedAt: Date.now() };
+    return false;
+  };
+
+  inFlightFlowCheck = runCheck().finally(() => {
+    inFlightFlowCheck = null;
+  });
+
+  return inFlightFlowCheck;
 }
 
 // ── Model IDs ─────────────────────────────────────────────────────────────────

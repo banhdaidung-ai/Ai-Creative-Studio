@@ -8,8 +8,12 @@ interface DBState {
   value: unknown;
 }
 
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 const openDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+
+  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = (event) => {
@@ -20,13 +24,24 @@ const openDB = (): Promise<IDBDatabase> => {
     };
 
     request.onsuccess = (event) => {
-      resolve((event.target as IDBOpenDBRequest).result);
+      const db = (event.target as IDBOpenDBRequest).result;
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      db.onclose = () => {
+        dbPromise = null;
+      };
+      resolve(db);
     };
 
     request.onerror = (event) => {
+      dbPromise = null;
       reject((event.target as IDBOpenDBRequest).error);
     };
   });
+
+  return dbPromise;
 };
 
 export const saveState = async (key: string, value: unknown): Promise<void> => {

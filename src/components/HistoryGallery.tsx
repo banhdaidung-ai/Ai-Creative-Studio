@@ -1,7 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useProject, ImageAsset } from '../contexts/ProjectContext';
-import { Trash2, Download, Box, Search, Filter, Calendar, Clock, Image as ImageIcon, X, CheckCircle2, Share2, ExternalLink } from 'lucide-react';
+import { Trash2, Download, Box, Search, Calendar, Clock, Image as ImageIcon, X, CheckCircle2, Film } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+const isVideoAsset = (item: ImageAsset): boolean =>
+  item.type === 'video' ||
+  item.mode === 'VIDEO_GENERATOR' ||
+  item.mode === 'video' ||
+  /\.(mp4|webm|mov)(\?|$)/i.test(item.url || '');
 
 const HistoryGallery: React.FC = () => {
   const { history, removeFromHistory, clearHistory, setWorkspaceAsset, workspaceAsset } = useProject();
@@ -10,6 +16,7 @@ const HistoryGallery: React.FC = () => {
   const [selectedAsset, setSelectedAsset] = useState<ImageAsset | null>(null);
   const [assetToDelete, setAssetToDelete] = useState<ImageAsset | null>(null);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(24);
 
   const filteredHistory = useMemo(() => {
     return history.filter(item => {
@@ -18,6 +25,11 @@ const HistoryGallery: React.FC = () => {
       return matchesSearch && matchesFilter;
     });
   }, [history, searchTerm, filterMode]);
+
+  const visibleHistory = useMemo(
+    () => filteredHistory.slice(0, visibleCount),
+    [filteredHistory, visibleCount]
+  );
 
   const modes = useMemo(() => {
     const uniqueModes = Array.from(new Set(history.map(item => item.mode)));
@@ -112,35 +124,49 @@ const HistoryGallery: React.FC = () => {
             <p className="text-slate-500 mt-2 max-w-xs">Bắt đầu tạo ảnh để lưu trữ lịch sử của bạn tại đây.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 pb-12">
-            <AnimatePresence mode="popLayout">
-              {filteredHistory.map((item) => (
-                <motion.div
-                  layout
+          <div className="pb-12">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
+              {visibleHistory.map((item) => (
+                <div
                   key={item.id}
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
-                  className="group relative aspect-[3/4] bg-slate-900 rounded-2xl overflow-hidden border border-white/10 shadow-xl hover:shadow-2xl hover:shadow-blue-500/10 transition-all cursor-pointer"
+                  className="cv-card group relative aspect-[3/4] bg-slate-900 rounded-2xl overflow-hidden border border-white/10 shadow-xl hover:shadow-2xl hover:shadow-blue-500/10 transition-all cursor-pointer"
                   onClick={() => setSelectedAsset(item)}
                 >
-                  <img 
-                    src={item.url} 
-                    alt={item.prompt} 
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                    loading="lazy"
-                  />
+                  {isVideoAsset(item) ? (
+                    <video
+                      src={item.url}
+                      muted
+                      loop
+                      playsInline
+                      preload="none"
+                      onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.pause();
+                        e.currentTarget.currentTime = 0;
+                      }}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    />
+                  ) : (
+                    <img 
+                      src={item.thumbnailUrl || item.url} 
+                      alt={item.prompt} 
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  )}
                   
                   {/* Overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col justify-end p-4">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-4">
                     <div className="flex items-center justify-between gap-2">
                        <div className="flex gap-1.5">
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDownload(item.url, `yody-ai-${item.id}.png`);
+                              const ext = isVideoAsset(item) ? 'mp4' : 'png';
+                              handleDownload(item.url, `yody-ai-${item.id || Date.now()}.${ext}`);
                             }}
-                            className="p-2 bg-white/10 hover:bg-white/20 rounded-lg backdrop-blur-md text-white transition-colors"
+                            className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
                           >
                             <Download size={14} />
                           </button>
@@ -149,7 +175,7 @@ const HistoryGallery: React.FC = () => {
                               e.stopPropagation();
                               setWorkspaceAsset(item);
                             }}
-                            className={`p-2 rounded-lg backdrop-blur-md transition-colors ${
+                            className={`p-2 rounded-lg transition-colors ${
                               workspaceAsset?.id === item.id 
                                 ? 'bg-green-500 text-white' 
                                 : 'bg-white/10 hover:bg-white/20 text-white'
@@ -164,7 +190,7 @@ const HistoryGallery: React.FC = () => {
                           e.stopPropagation();
                           setAssetToDelete(item);
                         }}
-                        className="p-2 bg-red-500/20 hover:bg-red-500/40 rounded-lg backdrop-blur-md text-red-400 transition-colors"
+                        className="p-2 bg-red-500/20 hover:bg-red-500/40 rounded-lg text-red-400 transition-colors"
                        >
                         <Trash2 size={14} />
                        </button>
@@ -172,7 +198,8 @@ const HistoryGallery: React.FC = () => {
                   </div>
 
                   {/* Mode Badge */}
-                  <div className="absolute top-3 left-3 px-2 py-1 bg-black/50 backdrop-blur-md rounded-lg border border-white/10">
+                  <div className="absolute top-3 left-3 px-2 py-1 bg-black/60 rounded-lg border border-white/10 flex items-center gap-1">
+                    {isVideoAsset(item) && <Film size={10} className="text-pink-400" />}
                     <span className="text-[8px] font-black text-white uppercase tracking-widest">{item.mode.replace('_', ' ')}</span>
                   </div>
 
@@ -182,9 +209,20 @@ const HistoryGallery: React.FC = () => {
                       <CheckCircle2 size={12} className="text-white" />
                     </div>
                   )}
-                </motion.div>
+                </div>
               ))}
-            </AnimatePresence>
+            </div>
+            {filteredHistory.length > visibleCount && (
+              <div className="mt-8 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + 24)}
+                  className="px-6 py-3 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black uppercase tracking-widest text-white transition-colors"
+                >
+                  Xem thêm ({filteredHistory.length - visibleCount} mục)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -208,13 +246,23 @@ const HistoryGallery: React.FC = () => {
               className="relative w-full max-w-6xl bg-[#0a0a0a] rounded-[2.5rem] border border-white/10 overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[90vh]"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Image Section */}
+              {/* Media Section */}
               <div className="flex-1 bg-black flex items-center justify-center overflow-hidden p-4">
-                <img 
-                  src={selectedAsset.url} 
-                  alt={selectedAsset.prompt} 
-                  className="max-w-full max-h-full object-contain rounded-xl shadow-2xl"
-                />
+                {isVideoAsset(selectedAsset) ? (
+                  <video
+                    src={selectedAsset.url}
+                    controls
+                    autoPlay
+                    loop
+                    className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
+                  />
+                ) : (
+                  <img 
+                    src={selectedAsset.url} 
+                    alt={selectedAsset.prompt} 
+                    className="max-w-full max-h-full object-contain rounded-xl shadow-2xl"
+                  />
+                )}
               </div>
 
               {/* Info Section */}
@@ -226,7 +274,9 @@ const HistoryGallery: React.FC = () => {
                     </div>
                     <div>
                       <h3 className="text-sm font-black text-white uppercase tracking-wider">Chi tiết</h3>
-                      <p className="text-[10px] text-slate-500 font-mono">{formatDate(selectedAsset.timestamp)}</p>
+                      <p className="text-[10px] text-slate-500 font-mono">
+                        {selectedAsset.timestamp ? formatDate(selectedAsset.timestamp) : 'Vừa xong'}
+                      </p>
                     </div>
                   </div>
                   <button 
@@ -254,7 +304,7 @@ const HistoryGallery: React.FC = () => {
                     </div>
                     <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
                        <span className="text-[9px] font-black text-slate-500 uppercase block mb-1">ID</span>
-                       <span className="text-xs font-mono text-slate-400">#{selectedAsset.id.slice(-6)}</span>
+                       <span className="text-xs font-mono text-slate-400">#{(selectedAsset.id || '000000').slice(-6)}</span>
                     </div>
                   </div>
 
@@ -277,7 +327,10 @@ const HistoryGallery: React.FC = () => {
 
                     <div className="grid grid-cols-2 gap-3">
                       <button 
-                        onClick={() => handleDownload(selectedAsset.url, `yody-ai-${selectedAsset.id}.png`)}
+                        onClick={() => {
+                          const ext = isVideoAsset(selectedAsset) ? 'mp4' : 'png';
+                          handleDownload(selectedAsset.url, `yody-ai-${selectedAsset.id || Date.now()}.${ext}`);
+                        }}
                         className="py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold text-white transition-all"
                       >
                         <Download size={16} /> Tải về

@@ -10,17 +10,8 @@ import {
   UserCircle, Shirt, Layers, X, 
   Download, Columns, Eye, Zap, 
   Loader2, PenTool,
-  Plus, ChevronDown, Wand2, Settings2, ChevronUp, Crown
+  ChevronDown, Wand2, Settings2, ChevronUp
 } from 'lucide-react';
-
-interface TryOnJob {
-  modelImage: string | null;
-  topRef: string | null;
-  bottomRef: string | null;
-  accessoryRef: string | null;
-  resultImage: string | null;
-  prompt: string;
-}
 
 const VirtualTryOn: React.FC = () => {
   const [modelImage, setModelImage] = useState<string | null>(null);
@@ -135,10 +126,6 @@ const VirtualTryOn: React.FC = () => {
     }
 
     const isFlow = isFlowModel(selectedModelId);
-    let flowReady = false;
-    if (isFlow) {
-      flowReady = await isFlowBackendAvailable().catch(() => false);
-    }
 
     if (!isFlow && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
       handleSelectKey();
@@ -197,7 +184,7 @@ const VirtualTryOn: React.FC = () => {
           if (flowResult) {
             result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
           }
-        } catch (flowErr: any) {
+        } catch {
           const hasKey = apiKeySelected || 
                          localStorage.getItem('gemini_api_key') || 
                          localStorage.getItem('google_account_pro') === 'true';

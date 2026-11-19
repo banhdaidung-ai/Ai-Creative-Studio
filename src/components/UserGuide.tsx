@@ -1,9 +1,8 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { 
-  Sparkles, Shirt, Camera, Eraser, Film, Lightbulb, Edit3, History, 
-  MousePointer2, Zap, Layers, Image as ImageIcon, CheckCircle2, 
-  Info, HelpCircle, BookOpen, ArrowRight, PlayCircle, Settings
+  Sparkles, Shirt, Camera, Eraser, Film, Lightbulb, Edit3,
+  Zap, Layers, CheckCircle2, BookOpen, PlayCircle, Settings
 } from 'lucide-react';
 
 const UserGuide: React.FC = () => {

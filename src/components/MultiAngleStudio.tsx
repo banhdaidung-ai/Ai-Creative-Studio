@@ -1,19 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
 import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
-import { resizeImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
+import { resizeImage, formatImageSrc } from '../utils/image';
 import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP } from '../services/flowService';
-import PhotoEditor from './PhotoEditor';
+import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { useProject } from '../contexts/ProjectContext';
+import ElapsedTimer from './ElapsedTimer';
 import { 
-  Camera, Upload, RefreshCw, Download, DownloadCloud,
-  Lightbulb, Loader2, Maximize2, X, Layers, Zap, Crown,
+  Camera, RefreshCw, Download, DownloadCloud,
+  Lightbulb, Loader2, Maximize2, X, Layers, Zap,
   Square, Image as ImageIcon, CheckSquare, Check,
-  RotateCcw, Eye, Scan, LayoutGrid, Film, ZoomIn, ZoomOut, User, Shirt, Palette,
-  Settings2, ChevronUp, ChevronDown, Sliders, Sparkles, Play, Box
+  LayoutGrid, Film, User, Shirt,
+  Settings2, ChevronUp, ChevronDown, Sliders, Play, Box
 } from 'lucide-react';
+
+const PhotoEditor = lazy(() => import('./PhotoEditor'));
 
 const STYLE_PRESETS = [
   { id: 'clean', label: 'Studio Clean', prompt: 'Professional studio lighting, solid neutral background, commercial e-commerce look.' },
@@ -46,8 +49,6 @@ const MultiAngleStudio: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'reel' | 'grid'>('grid');
   const [showConfig, setShowConfig] = useState(true);
-  
-  const [timer, setTimer] = useState(0);
 
   const [prompts, setPrompts] = useState<Record<string, string>>(() => {
     const initialPrompts: Record<string, string> = {};
@@ -135,16 +136,6 @@ const MultiAngleStudio: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    let interval: any;
-    if (processingAngles.size > 0) {
-      interval = setInterval(() => setTimer(t => t + 0.1), 100);
-    } else {
-      setTimer(0);
-    }
-    return () => clearInterval(interval);
-  }, [processingAngles.size]);
-
-  useEffect(() => {
     if (previewImage) {
         setZoom(1);
         setPan({ x: 0, y: 0 });
@@ -179,11 +170,14 @@ const MultiAngleStudio: React.FC = () => {
         setBackImage(base64);
         if (backInputRef.current) backInputRef.current.value = '';
     }
-  }, [aspectRatio]);
+  }, []);
 
   // Handle Paste Event
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
+        if (!containerRef.current || containerRef.current.offsetParent === null) return;
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
         const items = e.clipboardData?.items;
         if (!items) return;
 
@@ -261,12 +255,9 @@ const MultiAngleStudio: React.FC = () => {
   const generateAngle = async (angleId: string) => {
     if (!modelImage) return;
     const isFlow = isFlowModel(selectedModelId);
-    let flowReady = false;
-    if (isFlow) {
-      flowReady = await isFlowBackendAvailable().catch(() => false);
-    }
+    const isMuse = isMuseModel(selectedModelId);
 
-    if (!isFlow && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
+    if (!isFlow && !isMuse && MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && !apiKeySelected) {
         handleSelectKey();
         return;
     }
@@ -276,19 +267,29 @@ const MultiAngleStudio: React.FC = () => {
     try {
         let result: string | null | undefined = null;
 
-        if (isFlow) {
+        const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
+        const stylePrompt = STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt || '';
+        const customUserPrompt = prompts[angleId] || angleConfig?.userDesc || '';
+        const compositePrompt = `Professional high-end fashion lookbook photoshoot of the identical model wearing the exact same clothes from reference. Camera framing and angle: ${angleConfig?.promptDesc || ''}. Model pose: ${customUserPrompt}. ${stylePrompt}. Maintain 100% consistent model facial identity, body proportions, identical garment fabrics and patterns, studio flash lighting, 8k resolution, crisp photorealistic quality.`;
+
+        let refImg = modelImage;
+        if ((angleId === 'close' || angleId === 'macro') && faceImage) refImg = faceImage;
+        else if (angleId === 'back' && backImage) refImg = backImage;
+
+        if (isMuse) {
+            const museUrl = await generateImageViaMuse({
+                prompt: compositePrompt,
+                aspectRatio,
+                model: selectedModelId,
+                referenceImage: refImg ? formatImageSrc(refImg) : undefined,
+            });
+            if (museUrl) {
+                result = museUrl;
+            }
+        } else if (isFlow) {
             try {
-                const angleConfig = ANGLE_CONFIGS.find(a => a.id === angleId);
-                const stylePrompt = STYLE_PRESETS.find(s => s.id === selectedStyle)?.prompt || '';
-                const customUserPrompt = prompts[angleId] || angleConfig?.userDesc || '';
-                const prompt = `Professional high-end fashion lookbook photoshoot of the identical model wearing the exact same clothes from reference. Camera framing and angle: ${angleConfig?.promptDesc || ''}. Model pose: ${customUserPrompt}. ${stylePrompt}. Maintain 100% consistent model facial identity, body proportions, identical garment fabrics and patterns, studio flash lighting, 8k resolution, crisp photorealistic quality.`;
-
-                let refImg = modelImage;
-                if ((angleId === 'close' || angleId === 'macro') && faceImage) refImg = faceImage;
-                else if (angleId === 'back' && backImage) refImg = backImage;
-
                 const flowResult = await generateImageViaFlow({
-                    prompt,
+                    prompt: compositePrompt,
                     aspectRatio,
                     numImages: 1,
                     model: selectedModelId,
@@ -299,7 +300,7 @@ const MultiAngleStudio: React.FC = () => {
                 if (flowResult) {
                     result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
                 }
-            } catch (flowErr: any) {
+            } catch {
                 const hasKey = apiKeySelected || 
                                localStorage.getItem('gemini_api_key') || 
                                localStorage.getItem('google_account_pro') === 'true';
@@ -470,7 +471,7 @@ const MultiAngleStudio: React.FC = () => {
       <div className="flex-1 flex flex-col lg:flex-row gap-3 md:gap-4 overflow-hidden">
         {/* Sidebar */}
         <div className={`w-full lg:w-[320px] flex flex-col gap-4 transition-all duration-300 shrink-0 order-2 lg:order-1 ${showConfig ? 'h-auto max-h-[50vh] lg:max-h-full lg:h-full' : 'h-auto'}`}>
-          <div className="bg-white/10 dark:bg-white/5 backdrop-blur-2xl p-3 md:p-4 rounded-[2rem] md:rounded-[2.5rem] border border-white/20 dark:border-white/10 shadow-2xl flex flex-col gap-3 md:gap-4 flex-1 ring-1 ring-inset ring-white/10 overflow-hidden">
+          <div className="bg-white/95 dark:bg-[#0f1115]/95 p-3 md:p-4 rounded-[2rem] md:rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-2xl flex flex-col gap-3 md:gap-4 flex-1 ring-1 ring-inset ring-white/10 overflow-hidden isolated-panel">
             <div className="flex items-center justify-between lg:hidden p-1" onClick={() => setShowConfig(!showConfig)}>
                 <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
                     <Settings2 className="w-4 h-4" />
@@ -639,7 +640,7 @@ const MultiAngleStudio: React.FC = () => {
                     {/* Render Button */}
                     <button onClick={generateAll} disabled={!modelImage || processingAngles.size > 0} className="w-full py-3 md:py-4 rounded-[1.5rem] md:rounded-[1.8rem] font-black text-white flex items-center justify-center gap-3 bg-gradient-to-r from-yellow-500 to-orange-600 hover:scale-105 active:scale-95 shadow-2xl relative overflow-hidden group shrink-0 uppercase tracking-[0.2em] text-[10px] md:text-xs mt-2 transition-all">
                         {processingAngles.size > 0 ? <Loader2 className="w-4 h-4 animate-spin text-yellow-200" /> : <Zap className="w-4 h-4 fill-current text-yellow-200" />}
-                        <span>{processingAngles.size > 0 ? `Rendering (${timer.toFixed(1)}s)...` : "Tạo Bộ Ảnh"}</span>
+                        <span>{processingAngles.size > 0 ? <>Rendering (<ElapsedTimer active={processingAngles.size > 0} />)...</> : "Tạo Bộ Ảnh"}</span>
                     </button>
 
                     {/* Pro Tip */}
@@ -657,7 +658,7 @@ const MultiAngleStudio: React.FC = () => {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden order-1 lg:order-2">
-            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/5 backdrop-blur-3xl p-2 md:p-3 rounded-2xl border border-white/10 shadow-lg shrink-0">
+            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
                 <div className="flex items-center gap-4">
                     <span className="text-[9px] md:text-[10px] font-black uppercase text-slate-900 dark:text-white tracking-widest">Góc Máy ({Object.keys(results).length})</span>
                     {Object.keys(results).length > 0 && <button onClick={toggleSelectAll} className="flex items-center gap-2 px-2 py-1 md:px-3 md:py-1.5 rounded-xl hover:bg-white/10 text-[8px] md:text-[9px] font-black uppercase text-slate-400 transition-all border border-transparent hover:border-white/10">{selectedAngles.size === Object.keys(results).length ? <CheckSquare className="w-3 h-3 text-yellow-400" /> : <Square className="w-3 h-3" />} <span className="hidden md:inline">Select All</span></button>}
@@ -669,17 +670,17 @@ const MultiAngleStudio: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex-1 bg-black/20 backdrop-blur-3xl rounded-[2rem] md:rounded-[3rem] relative overflow-hidden shadow-2xl border border-white/10 ring-1 ring-inset ring-white/10 flex flex-col min-h-0">
+            <div className="flex-1 bg-black/25 rounded-[2rem] md:rounded-[3rem] relative overflow-hidden shadow-2xl border border-white/10 ring-1 ring-inset ring-white/10 flex flex-col min-h-0 isolated-panel">
                 <div className={`flex-1 ${viewMode === 'reel' ? 'overflow-x-auto overflow-y-hidden flex items-center' : 'overflow-y-auto overflow-x-hidden'} no-scrollbar p-3 md:p-4 transition-all`}>
                     <div className={viewMode === 'reel' ? "flex gap-3 px-2 mx-auto md:mx-0" : "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-4 w-full"}>
                         {ANGLE_CONFIGS.map((config) => (
-                            <div key={config.id} className={`${viewMode === 'reel' ? 'w-[200px] md:w-[250px] flex-shrink-0' : 'w-full'} group relative bg-white/5 backdrop-blur-2xl rounded-[1rem] md:rounded-[1.5rem] border border-white/10 overflow-hidden shadow-xl transition-all duration-500 hover:shadow-2xl flex flex-col ${selectedAngles.has(config.id) ? 'ring-2 ring-yellow-400' : ''}`}>
+                            <div key={config.id} className={`${viewMode === 'reel' ? 'w-[200px] md:w-[250px] flex-shrink-0' : 'w-full'} cv-card group relative bg-white/5 rounded-[1rem] md:rounded-[1.5rem] border border-white/10 overflow-hidden shadow-xl transition-all duration-300 hover:shadow-2xl flex flex-col ${selectedAngles.has(config.id) ? 'ring-2 ring-yellow-400' : ''}`}>
                                 <div className={`relative w-full bg-black/40 overflow-hidden ${aspectRatio === '1:1' ? 'aspect-square' : 'aspect-[3/4]'}`}>
                                     {processingAngles.has(config.id) ? (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20"><Loader2 className="w-8 h-8 text-yellow-400 animate-spin mb-2" /><span className="text-[8px] font-bold text-yellow-400/60 uppercase tracking-widest">Rendering...</span></div>
                                     ) : results[config.id] ? (
                                         <>
-                                            <img src={formatImageSrc(results[config.id])} className="w-full h-full object-cover" />
+                                            <img src={formatImageSrc(results[config.id])} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-1.5 md:gap-2">
                                                     <button onClick={() => setPreviewImage(results[config.id])} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Phóng to"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>
@@ -752,11 +753,13 @@ const MultiAngleStudio: React.FC = () => {
 
       {/* Editor Modal */}
       {editingAngleId && results[editingAngleId] && (
-          <PhotoEditor 
-              imageSrc={results[editingAngleId]}
-              onSave={handleSaveEdit}
-              onClose={() => setEditingAngleId(null)}
-          />
+          <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-yellow-400" /></div>}>
+            <PhotoEditor 
+                imageSrc={results[editingAngleId]}
+                onSave={handleSaveEdit}
+                onClose={() => setEditingAngleId(null)}
+            />
+          </Suspense>
       )}
 
       {/* Fullscreen Preview */}

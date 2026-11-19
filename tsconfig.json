@@ -26,5 +26,14 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "scripts",
+    "flow-backend",
+    "muse-backend",
+    "backend",
+    "functions"
+  ]
 }

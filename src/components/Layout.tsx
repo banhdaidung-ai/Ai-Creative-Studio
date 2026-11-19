@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AppMode } from '../types';
-import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, CheckCircle2, Loader2, RefreshCw, Box, ArrowRight, History, HelpCircle, Grid, Globe, Wifi } from 'lucide-react';
+import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, Loader2, RefreshCw, Box, History, HelpCircle, Grid, Globe, Wifi, ExternalLink } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
-import { isFlowBackendAvailable } from '../services/flowService';
+import { isFlowBackendAvailable, invalidateFlowHealthCache } from '../services/flowService';
+import { getMuseReadyStatus, fetchSystemInfo, getMuseAdminUrl } from '../services/museService';
 
 interface LayoutProps {
   currentMode: AppMode;
@@ -28,9 +29,13 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   const [vertexAccessToken, setVertexAccessToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [configType, setConfigType] = useState<'google' | 'vertex' | 'flow'>('google');
+  const [configType, setConfigType] = useState<'google' | 'vertex' | 'flow' | 'muse'>('google');
   const [flowBackendUrl, setFlowBackendUrl] = useState('');
   const [flowBackendStatus, setFlowBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [museBackendStatus, setMuseBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [museAccounts, setMuseAccounts] = useState<number>(0);
+  const [networkUrl, setNetworkUrl] = useState<string | null>(null);
+  const [museAdminUrl, setMuseAdminUrl] = useState<string>(getMuseAdminUrl());
 
   useEffect(() => {
     const checkKey = async () => {
@@ -72,13 +77,31 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
     return () => clearInterval(interval);
   }, []);
 
-  const checkFlowStatus = async () => {
+  const checkFlowStatus = useCallback(async (forceRefresh = false) => {
     setFlowBackendStatus('checking');
-    const available = await isFlowBackendAvailable();
+    const available = await isFlowBackendAvailable(forceRefresh);
     setFlowBackendStatus(available ? 'connected' : 'disconnected');
-  };
+  }, []);
 
-  const handleOpenUnlock = () => {
+  const checkMuseStatus = useCallback(async (forceRefresh = false) => {
+    setMuseBackendStatus('checking');
+    const st = await getMuseReadyStatus(forceRefresh);
+    setMuseBackendStatus(st.available ? 'connected' : 'disconnected');
+    setMuseAccounts(st.accounts);
+  }, []);
+
+  useEffect(() => {
+    void checkFlowStatus(false);
+    void checkMuseStatus(false);
+    fetchSystemInfo()
+      .then((info) => {
+        if (info?.networkUrl) setNetworkUrl(info.networkUrl);
+        if (info?.museAdminUrl) setMuseAdminUrl(info.museAdminUrl);
+      })
+      .catch(() => {});
+  }, [checkFlowStatus, checkMuseStatus]);
+
+  const handleOpenUnlock = useCallback((initialTab?: 'google' | 'vertex' | 'flow' | 'muse') => {
       setShowUnlockModal(true);
       // Load existing values
       setManualKey(localStorage.getItem('gemini_api_key') || '');
@@ -87,12 +110,15 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
       setVertexAccessToken(localStorage.getItem('vertex_access_token') || '');
       setFlowBackendUrl(localStorage.getItem('flow_backend_url') || '');
       checkFlowStatus();
-      if (localStorage.getItem('vertex_project_id')) {
+      checkMuseStatus();
+      if (initialTab) {
+        setConfigType(initialTab);
+      } else if (localStorage.getItem('vertex_project_id')) {
         setConfigType('vertex');
       } else {
         setConfigType('google');
       }
-  };
+  }, [checkFlowStatus, checkMuseStatus]);
 
   const handleSaveFlowBackend = async () => {
     setIsVerifying(true);
@@ -103,7 +129,8 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
     } else {
       localStorage.removeItem('flow_backend_url');
     }
-    const ok = await isFlowBackendAvailable();
+    invalidateFlowHealthCache();
+    const ok = await isFlowBackendAvailable(true);
     setFlowBackendStatus(ok ? 'connected' : 'disconnected');
     setIsVerifying(false);
     if (ok) {
@@ -114,9 +141,10 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   };
 
   useEffect(() => {
-    window.addEventListener('open_unlock_modal', handleOpenUnlock);
-    return () => window.removeEventListener('open_unlock_modal', handleOpenUnlock);
-  }, []);
+    const onOpenUnlock = () => handleOpenUnlock();
+    window.addEventListener('open_unlock_modal', onOpenUnlock);
+    return () => window.removeEventListener('open_unlock_modal', onOpenUnlock);
+  }, [handleOpenUnlock]);
 
   const handleProjectKey = async () => {
     if (window.aistudio?.openSelectKey) {
@@ -267,20 +295,20 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
         : 'bg-[#f0f2f5] bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-blue-50 via-white to-gray-100'
     }`}>
       {/* Mobile Top Header */}
-      <header className="md:hidden flex items-center justify-between px-4 h-14 bg-white/10 dark:bg-black/20 backdrop-blur-xl border-b border-white/10 z-50 shrink-0">
+      <header className="md:hidden flex items-center justify-between px-4 h-14 bg-white/85 dark:bg-[#0d0f14]/90 backdrop-blur-md border-b border-white/10 z-50 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-white rounded-lg p-1 shadow-md">
-            <img src="https://yody.vn/favicon.ico" alt="Y" className="w-full h-full object-contain" />
+          <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-lg flex items-center justify-center shadow-md font-black text-slate-950 text-sm">
+            Y
           </div>
           <span className="text-[12px] font-black tracking-tighter uppercase text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">Ai.YODY.IO</span>
         </div>
         <div className="flex items-center gap-2">
             {!apiKeySelected ? (
-                <button onClick={handleOpenUnlock} className="flex items-center gap-1 bg-gradient-to-r from-yellow-400 to-orange-500 text-white px-2 py-1.5 rounded-lg font-black text-[8px] uppercase shadow-lg">
+                <button onClick={() => handleOpenUnlock()} className="flex items-center gap-1 bg-gradient-to-r from-yellow-400 to-orange-500 text-white px-2 py-1.5 rounded-lg font-black text-[8px] uppercase shadow-lg">
                     <Key className="w-3 h-3" /> <span className="hidden sm:inline">Pro</span>
                 </button>
             ) : (
-                <button onClick={handleOpenUnlock} className="flex items-center gap-1 bg-gradient-to-r from-slate-800 to-black text-yellow-400 px-2 py-1.5 rounded-lg font-black text-[8px] uppercase shadow-lg border border-white/10">
+                <button onClick={() => handleOpenUnlock()} className="flex items-center gap-1 bg-gradient-to-r from-slate-800 to-black text-yellow-400 px-2 py-1.5 rounded-lg font-black text-[8px] uppercase shadow-lg border border-white/10">
                     <Crown className="w-3 h-3" /> <span className="hidden sm:inline">Active</span>
                 </button>
             )}
@@ -293,13 +321,13 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
 
       {/* Navigation: Fixed Bottom on Mobile, Sidebar on Desktop */}
       <aside className="fixed bottom-0 left-0 right-0 md:static w-full md:w-20 lg:w-64 flex flex-col z-[60] md:z-20 shrink-0 h-auto md:h-full">
-        <div className="bg-white/10 dark:bg-white/5 backdrop-blur-3xl md:backdrop-blur-2xl border-t md:border border-white/20 dark:border-white/10 md:rounded-[2rem] flex flex-row md:flex-col h-16 md:h-full shadow-2xl overflow-hidden relative ring-1 ring-inset ring-white/10">
+        <div className="bg-white/90 dark:bg-[#0d0f14]/95 md:backdrop-blur-md border-t md:border border-slate-200/80 dark:border-white/10 md:rounded-[2rem] flex flex-row md:flex-col h-16 md:h-full shadow-2xl overflow-hidden relative ring-1 ring-inset ring-white/10">
           
           {/* Desktop Logo Area */}
-          <div className="hidden md:flex p-3 md:p-5 md:border-b border-white/10 items-center justify-between lg:justify-start lg:gap-4 shrink-0 min-w-0 bg-white/5">
+          <div className="hidden md:flex p-3 md:p-5 md:border-b border-slate-200/60 dark:border-white/10 items-center justify-between lg:justify-start lg:gap-4 shrink-0 min-w-0 bg-black/[0.02] dark:bg-white/5">
              <div className="flex items-center gap-3">
-               <div className="w-10 h-10 md:w-12 md:h-12 bg-gradient-to-br from-white to-gray-100 rounded-2xl flex items-center justify-center shadow-lg border border-white/50 p-2 shrink-0 transform transition-transform hover:scale-105 hover:rotate-3">
-                 <img src="https://yody.vn/favicon.ico" alt="YODY" className="w-full h-full object-contain" />
+               <div className="w-10 h-10 md:w-12 md:h-12 bg-gradient-to-br from-yellow-400 via-amber-400 to-orange-500 rounded-2xl flex items-center justify-center shadow-lg border border-white/40 shrink-0 transform transition-transform hover:scale-105 hover:rotate-3">
+                 <span className="font-black text-slate-950 text-xl tracking-tighter">Y</span>
                </div>
                <div className="flex flex-col justify-center">
                   <span className="text-[14px] md:text-[16px] font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500 leading-none tracking-tight drop-shadow-sm uppercase">Ai Creative Studio</span>
@@ -341,11 +369,40 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
             ))}
           </nav>
 
+          {/* Live Engine Status Badges (Desktop) */}
+          <div className="hidden lg:flex items-center gap-1.5 px-3 pt-2">
+            <button
+              onClick={() => handleOpenUnlock('flow')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl bg-black/10 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/10 border border-slate-200/60 dark:border-white/10 transition-all text-[9px] font-bold uppercase tracking-wider"
+              title="Trạng thái Google Flow Backend"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                flowBackendStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                flowBackendStatus === 'checking' ? 'bg-amber-400' : 'bg-red-500'
+              }`} />
+              <span className="text-slate-600 dark:text-slate-300">Flow</span>
+            </button>
+            <button
+              onClick={() => handleOpenUnlock('muse')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl bg-black/10 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/10 border border-slate-200/60 dark:border-white/10 transition-all text-[9px] font-bold uppercase tracking-wider"
+              title="Trạng thái Muse AI Backend"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                museBackendStatus === 'connected'
+                  ? (museAccounts > 0 ? 'bg-pink-400 animate-pulse' : 'bg-amber-400')
+                  : museBackendStatus === 'checking' ? 'bg-amber-400' : 'bg-red-500'
+              }`} />
+              <span className="text-slate-600 dark:text-slate-300">
+                Muse{museAccounts > 0 ? ` (${museAccounts})` : ''}
+              </span>
+            </button>
+          </div>
+
           {/* Unlock Pro / Active Status (Desktop) */}
           <div className="hidden md:block p-3">
             {!apiKeySelected ? (
                 <button 
-                    onClick={handleOpenUnlock}
+                    onClick={() => handleOpenUnlock()}
                     className="w-full bg-gradient-to-r from-yellow-400 to-orange-600 rounded-[1.5rem] p-3 flex flex-col lg:flex-row items-center justify-center lg:justify-start gap-2 lg:gap-3 shadow-lg shadow-orange-500/20 hover:scale-[1.02] active:scale-95 transition-all group overflow-hidden relative"
                 >
                     <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
@@ -358,7 +415,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                     </div>
                 </button>
             ) : (
-                <div onClick={handleOpenUnlock} className="w-full bg-gradient-to-r from-slate-800 to-slate-900 rounded-[1.5rem] p-3 flex flex-col lg:flex-row items-center justify-center lg:justify-start gap-2 lg:gap-3 border border-white/5 relative overflow-hidden cursor-pointer group hover:bg-slate-800 transition-colors">
+                <div onClick={() => handleOpenUnlock()} className="w-full bg-gradient-to-r from-slate-800 to-slate-900 rounded-[1.5rem] p-3 flex flex-col lg:flex-row items-center justify-center lg:justify-start gap-2 lg:gap-3 border border-white/5 relative overflow-hidden cursor-pointer group hover:bg-slate-800 transition-colors">
                     <div className="p-2 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-xl shadow-lg shadow-orange-500/20 z-10">
                         <Crown className="w-4 h-4 text-white" />
                     </div>
@@ -391,10 +448,15 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
         </div>
       </aside>
 
-      {/* Main Glass Stage */}
-      <main className="flex-1 bg-white/10 dark:bg-white/5 backdrop-blur-3xl border-t md:border border-white/20 dark:border-white/10 md:rounded-[2.5rem] shadow-2xl overflow-hidden relative ring-1 ring-inset ring-white/10 flex flex-col h-full min-h-0 pb-16 md:pb-0">
-         <div className="absolute top-0 right-0 w-64 md:w-96 h-64 md:h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/2 animate-pulse"></div>
-         <div className="absolute bottom-0 left-0 w-64 md:w-96 h-64 md:h-96 bg-purple-500/10 rounded-full blur-3xl pointer-events-none translate-y-1/2 -translate-x-1/2 animate-pulse"></div>
+      {/* Main Glass Stage (GPU-friendly: static ambient gradient, no full-viewport backdrop-blur-3xl + pulsing blur) */}
+      <main
+        className="flex-1 bg-white/85 dark:bg-[#0b0d12]/95 border-t md:border border-slate-200/80 dark:border-white/10 md:rounded-[2.5rem] shadow-2xl overflow-hidden relative ring-1 ring-inset ring-white/10 flex flex-col h-full min-h-0 pb-16 md:pb-0 isolated-panel"
+        style={{
+          backgroundImage: isDarkMode
+            ? 'radial-gradient(circle at 100% 0%, rgba(59,130,246,0.10) 0%, transparent 42%), radial-gradient(circle at 0% 100%, rgba(168,85,247,0.10) 0%, transparent 42%)'
+            : 'radial-gradient(circle at 100% 0%, rgba(59,130,246,0.08) 0%, transparent 42%), radial-gradient(circle at 0% 100%, rgba(168,85,247,0.08) 0%, transparent 42%)',
+        }}
+      >
          <div className="relative z-10 h-full flex flex-col">
             {children}
          </div>
@@ -492,19 +554,79 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                 >
                                     Google Flow
                                 </button>
+                                <button 
+                                    onClick={() => setConfigType('muse')}
+                                    className={`px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${configType === 'muse' ? 'bg-pink-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                                >
+                                    Muse AI
+                                </button>
                             </div>
-                            <div className={`p-2 rounded-xl ${configType === 'google' ? 'bg-purple-500/20 text-purple-400' : configType === 'vertex' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                                {configType === 'google' ? <Key className="w-4 h-4" /> : configType === 'vertex' ? <Box className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
+                            <div className={`p-2 rounded-xl ${
+                                configType === 'google' 
+                                  ? 'bg-purple-500/20 text-purple-400' 
+                                  : configType === 'vertex' 
+                                  ? 'bg-blue-500/20 text-blue-400' 
+                                  : configType === 'flow'
+                                  ? 'bg-emerald-500/20 text-emerald-400'
+                                  : 'bg-pink-500/20 text-pink-400'
+                            }`}>
+                                {configType === 'google' ? <Key className="w-4 h-4" /> : configType === 'vertex' ? <Box className="w-4 h-4" /> : configType === 'flow' ? <Globe className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
                             </div>
                         </div>
 
                         <div className="flex-1">
                             <div className="font-bold text-white text-sm mb-2 uppercase tracking-wide">
-                                {configType === 'google' ? 'Nhập API Key' : configType === 'vertex' ? 'Cấu hình Vertex AI' : 'Google Flow Backend'}
+                                {configType === 'google' ? 'Nhập API Key' : configType === 'vertex' ? 'Cấu hình Vertex AI' : configType === 'flow' ? 'Google Flow Backend' : 'Muse AI (muse2api)'}
                             </div>
                             
                             <div className="space-y-3">
-                                {configType === 'flow' ? (
+                                {configType === 'muse' ? (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between text-[10px]">
+                                            <span className="text-slate-400 font-medium">Trạng thái backend:</span>
+                                            <span className={`font-bold flex items-center gap-1.5 ${
+                                                museBackendStatus === 'connected' ? 'text-emerald-400' :
+                                                museBackendStatus === 'checking' ? 'text-amber-400' : 'text-red-400'
+                                            }`}>
+                                                <span className={`w-2 h-2 rounded-full ${
+                                                    museBackendStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                                                    museBackendStatus === 'checking' ? 'bg-amber-400 animate-spin' : 'bg-red-500'
+                                                }`} />
+                                                {museBackendStatus === 'connected' ? `Đã kết nối (${museAccounts} tài khoản)` :
+                                                 museBackendStatus === 'checking' ? 'Đang kiểm tra...' : 'Chưa kết nối'}
+                                            </span>
+                                        </div>
+
+                                        <div className="p-3 bg-pink-500/10 rounded-xl border border-pink-500/20 text-[9px] text-pink-200 space-y-1.5 leading-relaxed">
+                                            <p className="font-bold text-pink-300 flex items-center justify-between">
+                                                <span>Quản lý Cookie & Đăng nhập</span>
+                                                <span className="text-[8px] bg-pink-500/30 px-1.5 py-0.5 rounded text-pink-200">Port 18610</span>
+                                            </p>
+                                            <p className="text-slate-300">
+                                                Muse2API chạy cục bộ trên máy và tự động duy trì session 48h. Mở trang quản lý để nạp Cookie tài khoản muse.ai.
+                                            </p>
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <a 
+                                                href={museAdminUrl} 
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex-1 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 flex items-center justify-center gap-1.5 text-white bg-pink-600 hover:bg-pink-500"
+                                            >
+                                                <span>Mở Trang Admin Muse</span>
+                                                <ExternalLink size={12} />
+                                            </a>
+                                            <button
+                                                onClick={() => checkMuseStatus(true)}
+                                                className="px-3 py-2.5 rounded-lg bg-white/5 border border-white/10 text-slate-300 hover:text-white"
+                                                title="Kiểm tra lại kết nối"
+                                            >
+                                                <RefreshCw size={12} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : configType === 'flow' ? (
                                     <div className="space-y-3">
                                         <div className="flex items-center justify-between text-[10px]">
                                             <span className="text-slate-400 font-medium">Trạng thái backend:</span>
@@ -540,7 +662,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                                 <Wifi className="w-3 h-3 text-emerald-400" />
                                                 Mở trên máy khác cùng Wi-Fi:
                                             </p>
-                                            <p>Truy cập vào địa chỉ IP mạng của máy chủ Mac: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">http://192.168.0.2:3000</code></p>
+                                            <p>Truy cập vào địa chỉ IP mạng của máy chủ: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">{networkUrl || window.location.origin}</code></p>
                                             <p className="text-slate-500 text-[8px]">Hệ thống sẽ tự động chuyển tiếp yêu cầu đến Google Flow Backend trên máy Mac.</p>
                                         </div>
 
@@ -605,7 +727,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                     </div>
                                 )}
 
-                                {configType !== 'flow' && (
+                                {configType !== 'flow' && configType !== 'muse' && (
                                   <div className="flex gap-2">
                                       <button 
                                           onClick={handleManualKey} 

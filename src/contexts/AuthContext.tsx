@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useMemo,
   ReactNode,
 } from 'react';
 import {
@@ -50,10 +51,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     return null;
   });
-  const [loading, setLoading] = useState(true);
+  // Nếu đã có phiên Guest cục bộ -> không chặn màn hình bằng spinner
+  const [loading, setLoading] = useState<boolean>(() => localStorage.getItem('guest_mode') !== 'true');
 
   useEffect(() => {
+    let settled = false;
+
+    // Safety fallback: tránh kẹt màn hình chờ vô hạn khi mạng chậm hoặc Firebase Auth phản hồi chậm
+    const fallbackTimer = window.setTimeout(() => {
+      if (!settled) {
+        setLoading(false);
+      }
+    }, 2500);
+
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      settled = true;
+      window.clearTimeout(fallbackTimer);
       if (firebaseUser) {
         setUser(firebaseUser);
         localStorage.removeItem('guest_mode');
@@ -63,20 +76,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         const isGuest = localStorage.getItem('guest_mode') === 'true';
         if (isGuest) {
-          setUser({
-            uid: 'guest-demo-user',
-            email: 'guest@yody.io',
-            displayName: 'Khách trải nghiệm',
-            photoURL: '',
-            getIdToken: async () => 'demo-token',
-          } as unknown as User);
+          setUser((prev) =>
+            prev?.uid === 'guest-demo-user'
+              ? prev
+              : ({
+                  uid: 'guest-demo-user',
+                  email: 'guest@yody.io',
+                  displayName: 'Khách trải nghiệm',
+                  photoURL: '',
+                  getIdToken: async () => 'demo-token',
+                } as unknown as User)
+          );
         } else {
           setUser(null);
         }
       }
       setLoading(false);
     });
-    return () => unsubscribe();
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
@@ -90,6 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInAsGuest = useCallback(() => {
     localStorage.setItem('guest_mode', 'true');
+    setLoading(false);
     setUser({
       uid: 'guest-demo-user',
       email: 'guest@yody.io',
@@ -115,8 +136,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
+  const contextValue = useMemo(
+    () => ({ user, loading, signInWithGoogle, signInAsGuest, logout, getIdToken }),
+    [user, loading, signInWithGoogle, signInAsGuest, logout, getIdToken]
+  );
+
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithGoogle, signInAsGuest, logout, getIdToken }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

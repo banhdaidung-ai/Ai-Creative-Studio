@@ -25,8 +25,6 @@ export const MODEL_OPTIONS = [
   { id: 'imagen-4.0-generate-001', name: 'Imagen 4 (API)', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
 ];
 
-import { GeminiService as CoreGeminiService } from '../../server/gemini';
-
 export class GeminiService {
   private async rpc(method: string, args: any[]) {
       const customKey = localStorage.getItem('gemini_api_key') || undefined;
@@ -57,6 +55,7 @@ export class GeminiService {
         return data.result;
       } catch (err: any) {
         console.warn(`[GeminiService] Server RPC unavailable (${err.message}). Falling back to direct client execution.`);
+        const { GeminiService: CoreGeminiService } = await import('../../server/gemini');
         const localService = new CoreGeminiService(customKey, vertexConfig);
         if (typeof (localService as any)[method] === 'function') {
           return await (localService as any)[method](...args);

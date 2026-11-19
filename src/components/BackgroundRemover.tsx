@@ -45,7 +45,7 @@ const BackgroundRemover: React.FC = () => {
   const { workspaceAsset, setWorkspaceAsset } = useProject();
   const [image, setImage] = useState<string | null>(null);
   const [originalImage, setOriginalImage] = useState<string | null>(null);
-  const [mask, setMask] = useState<string | null>(null);
+  const [, setMask] = useState<string | null>(null);
   const [transparentResult, setTransparentResult] = useState<string | null>(null);
   const [finalResult, setFinalResult] = useState<string | null>(null);
   

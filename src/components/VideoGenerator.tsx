@@ -2,14 +2,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { geminiService } from '../services/gemini';
 import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable } from '../services/flowService';
-import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Plus, Globe, X } from 'lucide-react';
-import { fileToBase64, resizeImage } from '../utils/image';
+import { generateVideoViaMuse, getMuseReadyStatus, fetchMuseAdminUrl, getMuseAdminUrl } from '../services/museService';
+import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Globe, X, ExternalLink } from 'lucide-react';
+import { resizeImage } from '../utils/image';
 import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 
 const VideoGenerator: React.FC = () => {
-  const { workspaceAsset, addToWorkspace } = useProject();
+  const { workspaceAsset, addToWorkspace, addToHistory } = useProject();
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -18,18 +19,34 @@ const VideoGenerator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
-  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow'>('flow');
+  const [selectedVideoModel, setSelectedVideoModel] = useState<'gemini' | 'flow' | 'muse'>('flow');
   const [flowVideoModel, setFlowVideoModel] = useState<string>(FLOW_MODEL_IDS.VIDEO_VEO_QUALITY);
+  const [museAccountsCount, setMuseAccountsCount] = useState<number>(0);
+  const [museAdminUrl, setMuseAdminUrl] = useState<string>(getMuseAdminUrl());
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const [duration, setDuration] = useState<number>(5);
   const usingFlow = selectedVideoModel === 'flow';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    fetchMuseAdminUrl().then(setMuseAdminUrl);
+  }, []);
+
+  useEffect(() => {
     const checkKey = async () => {
-        const isFlowReady = await isFlowBackendAvailable();
+        const [isFlowReady, museStatus] = await Promise.all([
+          isFlowBackendAvailable(false),
+          getMuseReadyStatus(false),
+        ]);
+        setMuseAccountsCount(museStatus.accounts);
+
         if (isFlowReady) {
             setSelectedVideoModel('flow');
+            setApiKeySelected(true);
+            return;
+        }
+        if (museStatus.accounts > 0) {
+            setSelectedVideoModel('muse');
             setApiKeySelected(true);
             return;
         }
@@ -81,16 +98,17 @@ const VideoGenerator: React.FC = () => {
         const base64 = await resizeImage(file, 1280, 'image/jpeg', 0.85);
         setImage(base64);
         setError(null);
-      } catch (err) {
+      } catch {
         setError("Lỗi đọc file ảnh.");
       }
     }
   };
 
   const generateVideo = async () => {
-    const usingFlow = selectedVideoModel === 'flow';
+    const isFlow = selectedVideoModel === 'flow';
+    const isMuse = selectedVideoModel === 'muse';
 
-    if (!usingFlow && !apiKeySelected && !localStorage.getItem('gemini_api_key') && localStorage.getItem('google_account_pro') !== 'true') {
+    if (!isFlow && !isMuse && !apiKeySelected && !localStorage.getItem('gemini_api_key') && localStorage.getItem('google_account_pro') !== 'true') {
       handleSelectKey();
       return;
     }
@@ -103,8 +121,10 @@ const VideoGenerator: React.FC = () => {
     setVideoUrl(null);
     setProgress(0);
 
+    let statusInterval: ReturnType<typeof setInterval> | null = null;
+
     try {
-      if (usingFlow) {
+      if (isFlow) {
         let isLocalFlowActive = false;
         try {
           isLocalFlowActive = await isFlowBackendAvailable();
@@ -145,6 +165,8 @@ const VideoGenerator: React.FC = () => {
           );
           if (url) {
             setVideoUrl(url);
+            addToHistory({ url, prompt, mode: 'VIDEO_GENERATOR', type: 'video' });
+            toast.success('Đã tạo xong video và lưu vào Lịch sử!');
             return;
           } else {
             setError("Google Flow không trả về video.");
@@ -163,35 +185,70 @@ const VideoGenerator: React.FC = () => {
         }
       }
 
-      // ── Gemini Veo path ────────────────────────────────────────────
-      setStatus('Đang khởi tạo phiên làm việc với Google Veo Cloud...');
-        let currentProgress = 0;
-        const statusInterval = setInterval(() => {
-          const messages = [
-            'Đang phân tích yêu cầu...',
-            'Đang render khủng hình...',
-            'Đang xử lý chuyển động...',
-            'Đang tối ưu hóa chất lượng...',
-            'Gần xong rồi, vui lòng đợi thêm chút nữa...'
-          ];
-          setStatus(messages[Math.floor(Math.random() * messages.length)]);
-          currentProgress += Math.random() * 5;
-          if (currentProgress > 95) currentProgress = 95;
-          setProgress(currentProgress);
-        }, 5000);
-
-        const url = await geminiService.generateVideo(prompt, image || undefined);
-        clearInterval(statusInterval);
-        setProgress(100);
-
+      // ── Muse AI path ──────────────────────────────────────────────
+      if (isMuse) {
+        setStatus('Đang gửi yêu cầu tạo video tới Muse.ai...');
+        setProgress(10);
+        let refImgPayload: string | undefined = undefined;
+        if (image) {
+          refImgPayload = image.startsWith('data:') ? image : `data:image/jpeg;base64,${image}`;
+        }
+        const effectivePrompt = prompt.trim() || 'Cinematic dramatic camera movement, high quality 4k video';
+        const url = await generateVideoViaMuse(
+          {
+            prompt: effectivePrompt,
+            duration,
+            aspectRatio,
+            referenceImage: refImgPayload,
+          },
+          (prog, message) => {
+            setProgress(prog);
+            setStatus(message);
+          }
+        );
         if (url) {
           setVideoUrl(url);
+          setProgress(100);
+          addToHistory({ url, prompt: effectivePrompt, mode: 'VIDEO_GENERATOR', type: 'video' });
+          toast.success('Đã tạo xong video Muse và lưu vào Lịch sử!');
+          return;
         } else {
-          setError("Không nhận được kết quả từ server.");
+          setError("Muse không trả về video.");
+          return;
         }
+      }
+
+      // ── Gemini Veo path ────────────────────────────────────────────
+      setStatus('Đang khởi tạo phiên làm việc với Google Veo Cloud...');
+      let currentProgress = 0;
+      statusInterval = setInterval(() => {
+        const messages = [
+          'Đang phân tích yêu cầu...',
+          'Đang render khung hình...',
+          'Đang xử lý chuyển động...',
+          'Đang tối ưu hóa chất lượng...',
+          'Gần xong rồi, vui lòng đợi thêm chút nữa...'
+        ];
+        setStatus(messages[Math.floor(Math.random() * messages.length)]);
+        currentProgress += Math.random() * 5;
+        if (currentProgress > 95) currentProgress = 95;
+        setProgress(currentProgress);
+      }, 5000);
+
+      const url = await geminiService.generateVideo(prompt, image || undefined);
+      setProgress(100);
+
+      if (url) {
+        setVideoUrl(url);
+        addToHistory({ url, prompt, mode: 'VIDEO_GENERATOR', type: 'video' });
+        toast.success('Đã tạo xong video và lưu vào Lịch sử!');
+      } else {
+        setError("Không nhận được kết quả từ server.");
+      }
     } catch (err: any) {
       setError(err.message || "Lỗi khi tạo video.");
     } finally {
+      if (statusInterval) clearInterval(statusInterval);
       setIsGenerating(false);
     }
   };
@@ -277,7 +334,17 @@ const VideoGenerator: React.FC = () => {
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
               >
-                <Globe size={11} /> Google Flow (Khuyên dùng)
+                <Globe size={11} /> Flow
+              </button>
+              <button
+                onClick={() => setSelectedVideoModel('muse')}
+                className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
+                  selectedVideoModel === 'muse'
+                    ? 'bg-pink-500/20 text-pink-400 border-b-2 border-pink-500'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <Sparkles size={11} /> Muse AI {museAccountsCount > 0 ? `(${museAccountsCount})` : ''}
               </button>
               <button
                 onClick={() => setSelectedVideoModel('gemini')}
@@ -287,7 +354,7 @@ const VideoGenerator: React.FC = () => {
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
               >
-                <Sparkles size={11} /> Gemini Veo API
+                <Sparkles size={11} /> Veo API
               </button>
             </div>
 
@@ -385,11 +452,107 @@ const VideoGenerator: React.FC = () => {
               </div>
             )}
 
+            {/* Chi tiết cài đặt khi chọn Muse AI */}
+            {selectedVideoModel === 'muse' && (
+              <div className="p-3 bg-pink-500/5 rounded-2xl border border-pink-500/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-[10px] font-black text-pink-400 uppercase tracking-wider block">
+                      Mô hình Muse Video (muse.ai)
+                    </label>
+                    <p className="text-[9px] text-slate-400">
+                      Tạo video điện ảnh từ Prompt hoặc ảnh tham chiếu (Image-to-Video).
+                    </p>
+                  </div>
+                  <a
+                    href={museAdminUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-pink-600/80 hover:bg-pink-600 text-white text-[8px] font-black uppercase tracking-wider transition-all"
+                  >
+                    <span>Cookie ({museAccountsCount})</span>
+                    <ExternalLink size={9} />
+                  </a>
+                </div>
+
+                {museAccountsCount === 0 && (
+                  <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[9px] text-amber-300 flex items-center justify-between">
+                    <span>⚠️ Chưa có cookie tài khoản Muse. Vui lòng thêm cookie để bắt đầu.</span>
+                    <a
+                      href={museAdminUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-0.5 rounded bg-amber-500 text-black font-bold shrink-0 ml-2"
+                    >
+                      Thêm Cookie
+                    </a>
+                  </div>
+                )}
+
+                {/* Tỷ lệ khung hình & Thời lượng */}
+                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-white/5">
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                      Tỷ lệ khung hình
+                    </label>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setAspectRatio('16:9')}
+                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${
+                          aspectRatio === '16:9'
+                            ? 'bg-pink-500 text-white'
+                            : 'bg-black/30 border border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        16:9 Ngang
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAspectRatio('9:16')}
+                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${
+                          aspectRatio === '9:16'
+                            ? 'bg-pink-500 text-white'
+                            : 'bg-black/30 border border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        9:16 Dọc
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                      Thời lượng video
+                    </label>
+                    <div className="grid grid-cols-4 gap-1">
+                      {[5, 6, 8, 10].map((sec) => (
+                        <button
+                          key={sec}
+                          type="button"
+                          onClick={() => setDuration(sec)}
+                          className={`py-1.5 rounded-lg text-[9px] font-bold transition-all text-center ${
+                            duration === sec
+                              ? 'bg-pink-500 text-white'
+                              : 'bg-black/30 border border-white/10 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {sec}s
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={generateVideo}
               disabled={isGenerating || !prompt.trim()}
               className={`w-full py-4 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 transition-all flex items-center justify-center gap-3 ${
-                selectedVideoModel === 'flow'
+                selectedVideoModel === 'muse'
+                  ? 'bg-gradient-to-r from-pink-500 to-rose-600 shadow-pink-500/20'
+                  : selectedVideoModel === 'flow'
                   ? 'bg-gradient-to-r from-emerald-500 to-teal-600 shadow-emerald-500/20'
                   : 'bg-gradient-to-r from-red-500 to-orange-600 shadow-red-500/20'
               }`}

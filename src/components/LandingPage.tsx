@@ -9,11 +9,26 @@ interface LandingPageProps {
 }
 
 const PALETTES = [
-  { primary: 'from-blue-600 to-indigo-700', blobs: ['bg-blue-500', 'bg-indigo-400', 'bg-cyan-300'] },
-  { primary: 'from-purple-600 to-pink-700', blobs: ['bg-purple-500', 'bg-pink-400', 'bg-fuchsia-300'] },
-  { primary: 'from-emerald-600 to-teal-700', blobs: ['bg-emerald-500', 'bg-teal-400', 'bg-lime-300'] },
-  { primary: 'from-orange-600 to-red-700', blobs: ['bg-orange-500', 'bg-red-400', 'bg-amber-300'] },
-  { primary: 'from-cyan-600 to-blue-700', blobs: ['bg-cyan-500', 'bg-blue-400', 'bg-indigo-300'] },
+  {
+    primary: 'from-blue-600 to-indigo-700',
+    glows: ['rgba(59,130,246,0.28)', 'rgba(99,102,241,0.22)', 'rgba(34,211,238,0.14)'],
+  },
+  {
+    primary: 'from-purple-600 to-pink-700',
+    glows: ['rgba(168,85,247,0.28)', 'rgba(236,72,153,0.22)', 'rgba(232,121,249,0.14)'],
+  },
+  {
+    primary: 'from-emerald-600 to-teal-700',
+    glows: ['rgba(16,185,129,0.28)', 'rgba(20,184,166,0.22)', 'rgba(132,204,22,0.14)'],
+  },
+  {
+    primary: 'from-orange-600 to-red-700',
+    glows: ['rgba(249,115,22,0.28)', 'rgba(239,68,68,0.22)', 'rgba(251,191,36,0.14)'],
+  },
+  {
+    primary: 'from-cyan-600 to-blue-700',
+    glows: ['rgba(6,182,212,0.28)', 'rgba(59,130,246,0.22)', 'rgba(99,102,241,0.14)'],
+  },
 ];
 
 const LAST_SEEN_UPDATE_KEY = 'yody_last_seen_update_id';
@@ -55,12 +70,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
       {/* Changelog Modal */}
       <ChangelogModal isOpen={showChangelog} onClose={handleCloseChangelog} />
 
-      {/* Background Animated Blobs */}
-      <div className="absolute inset-0 z-0">
-        <div className={`absolute top-[-10%] left-[-10%] w-[50%] h-[50%] ${palette.blobs[0]} rounded-full blur-[120px] opacity-40 animate-blob`}></div>
-        <div className={`absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] ${palette.blobs[1]} rounded-full blur-[120px] opacity-30 animate-blob animation-delay-2000`}></div>
-        <div className={`absolute top-[20%] right-[10%] w-[30%] h-[30%] ${palette.blobs[2]} rounded-full blur-[100px] opacity-20 animate-blob animation-delay-4000`}></div>
-      </div>
+      {/* GPU-friendly static ambient radial glow (replaces heavy 120px animated CSS blur) */}
+      <div
+        className="absolute inset-0 z-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+            radial-gradient(circle at 15% 15%, ${palette.glows[0]} 0%, transparent 48%),
+            radial-gradient(circle at 85% 85%, ${palette.glows[1]} 0%, transparent 50%),
+            radial-gradient(circle at 75% 28%, ${palette.glows[2]} 0%, transparent 38%)
+          `,
+        }}
+      />
 
       {/* Header News Button & User Profile (Top Right) */}
       <div className="absolute top-6 right-6 z-20 flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-1000 delay-300">
@@ -120,23 +140,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
         </div>
       </footer>
 
-      <style>{`
-        @keyframes blob {
-          0% { transform: translate(0px, 0px) scale(1); }
-          33% { transform: translate(30px, -50px) scale(1.1); }
-          66% { transform: translate(-20px, 20px) scale(0.9); }
-          100% { transform: translate(0px, 0px) scale(1); }
-        }
-        .animate-blob {
-          animation: blob 7s infinite alternate ease-in-out;
-        }
-        .animation-delay-2000 {
-          animation-delay: 2s;
-        }
-        .animation-delay-4000 {
-          animation-delay: 4s;
-        }
-      `}</style>
     </div>
   );
 };

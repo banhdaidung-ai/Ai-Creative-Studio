@@ -4,6 +4,11 @@ import { useAuth } from '../contexts/AuthContext';
 export default function LoginGate({ children }: { children: React.ReactNode }) {
   const { user, loading, signInWithGoogle, signInAsGuest } = useAuth();
 
+  // ── Logged in (or restored Guest session) — show app immediately ───────────
+  if (user) {
+    return <>{children}</>;
+  }
+
   // ── Loading ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -17,11 +22,6 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
         <div className="login-spinner" />
       </div>
     );
-  }
-
-  // ── Logged in — show app ───────────────────────────────────────────────────
-  if (user) {
-    return <>{children}</>;
   }
 
   // ── Login Gate ─────────────────────────────────────────────────────────────

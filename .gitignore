@@ -32,6 +32,13 @@ flow-backend/__pycache__/
 flow-backend/src/__pycache__/
 flow-backend/.env
 
+# Muse Backend
+muse-backend/.venv/
+muse-backend/data/
+muse-backend/.env
+muse-backend/__pycache__/
+muse-backend/*/__pycache__/
+
 # AI & Editor Tools
 .claude/
 .firebase/

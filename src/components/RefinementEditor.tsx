@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Stage, Layer, Line, Circle, Image as KonvaImage } from 'react-konva';
-import { X, Eraser, Paintbrush, RotateCcw, Check, Loader2, Sparkles, Undo2, ZoomIn, ZoomOut, Maximize2, MousePointer2, Wand2, Shirt, User, Image as ImageIcon, Upload, Plus, Trash2, Eye, EyeOff, Scissors, FlipHorizontal } from 'lucide-react';
+import { X, Eraser, Paintbrush, RotateCcw, Loader2, Sparkles, Undo2, ZoomIn, ZoomOut, Maximize2, Wand2, Shirt, User, Image as ImageIcon, Upload, Plus, Trash2, Eye, EyeOff, Scissors } from 'lucide-react';
 import { GeminiService } from '../services/gemini';
 import { resizeImage } from '../utils/image';
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Monitor, Smartphone, Square, ArrowLeftRight, Image as ImageIcon, ChevronDown } from 'lucide-react';
+import { Monitor, Smartphone, ArrowLeftRight, Image as ImageIcon, ChevronDown } from 'lucide-react';
 
 interface AspectRatioSelectorProps {
   value: string;

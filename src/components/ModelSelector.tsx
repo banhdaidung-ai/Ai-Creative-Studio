@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MODEL_OPTIONS } from '../services/gemini';
 import { FLOW_MODEL_IDS, isFlowModel, isFlowBackendAvailable } from '../services/flowService';
-import { Sparkles, Zap, Image as ImageIcon, Palette, ChevronDown, Video, Globe } from 'lucide-react';
+import { MUSE_MODEL_OPTIONS, isMuseModel, getMuseReadyStatus, fetchMuseAdminUrl, getMuseAdminUrl } from '../services/museService';
+import { Sparkles, Zap, Image as ImageIcon, Palette, ChevronDown, Video, Globe, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Google Flow model definitions
@@ -63,30 +64,71 @@ interface ModelSelectorProps {
   selectedModelId: string;
   onModelSelect: (modelId: string) => void;
   className?: string;
+  filterType?: 'image' | 'video' | 'all';
 }
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   selectedModelId,
   onModelSelect,
-  className = ""
+  className = "",
+  filterType = 'image',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'gemini' | 'flow'>(
-    isFlowModel(selectedModelId) ? 'flow' : 'gemini'
+  const [activeTab, setActiveTab] = useState<'gemini' | 'flow' | 'muse'>(
+    isMuseModel(selectedModelId) ? 'muse' : isFlowModel(selectedModelId) ? 'flow' : 'gemini'
   );
   const [flowBackendOnline, setFlowBackendOnline] = useState<boolean | null>(null);
+  const [museBackendOnline, setMuseBackendOnline] = useState<boolean | null>(null);
+  const [museAccountsCount, setMuseAccountsCount] = useState<number>(0);
+  const [museAdminUrl, setMuseAdminUrl] = useState<string>(getMuseAdminUrl());
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const visibleMuseModels = filterType === 'all'
+    ? MUSE_MODEL_OPTIONS
+    : MUSE_MODEL_OPTIONS.filter(m => m.type === filterType);
 
   const selectedGeminiModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
   const selectedFlowModel = FLOW_MODEL_OPTIONS.find(m => m.id === selectedModelId);
-  const selectedModel = selectedGeminiModel || selectedFlowModel || FLOW_MODEL_OPTIONS[0];
+  const selectedMuseModel = MUSE_MODEL_OPTIONS.find(m => m.id === selectedModelId);
+  const selectedModel = selectedGeminiModel || selectedFlowModel || selectedMuseModel || FLOW_MODEL_OPTIONS[0];
   const isFlowSelected = !!selectedFlowModel;
+  const isMuseSelected = !!selectedMuseModel;
 
   useEffect(() => {
-    isFlowBackendAvailable().then(isOnline => {
+    let cancelled = false;
+    void Promise.all([
+      isFlowBackendAvailable(false),
+      getMuseReadyStatus(false),
+      fetchMuseAdminUrl(),
+    ]).then(([isOnline, st, adminUrl]) => {
+      if (cancelled) return;
       setFlowBackendOnline(isOnline);
+      setMuseBackendOnline(st.available);
+      setMuseAccountsCount(st.accounts);
+      setMuseAdminUrl(adminUrl);
     });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Re-sync cached status when user opens dropdown
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    void Promise.all([
+      isFlowBackendAvailable(false),
+      getMuseReadyStatus(false),
+    ]).then(([isOnline, st]) => {
+      if (cancelled) return;
+      setFlowBackendOnline(isOnline);
+      setMuseBackendOnline(st.available);
+      setMuseAccountsCount(st.accounts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -99,9 +141,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   }, []);
 
   const getIcon = (id: string) => {
-    if (id.includes('omni') || id.includes('audio')) return Sparkles;
-    if (id.includes('veo') || id === FLOW_MODEL_IDS.VIDEO) return Video;
-    if (id.includes('flow')) return Globe;
+    if (id.includes('muse-video') || id.includes('veo') || id === FLOW_MODEL_IDS.VIDEO) return Video;
+    if (id.includes('muse-spark') || id.includes('omni') || id.includes('audio')) return Sparkles;
+    if (id.includes('muse') || id.includes('flow')) return Globe;
     if (id.includes('pro')) return Sparkles;
     if (id.includes('imagen')) return Palette;
     if (id.includes('3.1') || id.includes('lite') || id.includes('fast')) return Zap;
@@ -122,8 +164,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             isOpen ? 'ring-2 ring-blue-500/20 dark:ring-white/10 border-blue-500/50 dark:border-white/30' : ''
           }`}
         >
-          <div className={`p-2 rounded-xl text-white ${isFlowSelected ? 'bg-emerald-500/20 dark:bg-emerald-500/30' : 'bg-slate-100 dark:bg-white/10 !text-slate-700 dark:!text-white'}`}>
-            {React.createElement(getIcon(selectedModel.id), { size: 18, className: isFlowSelected ? 'text-emerald-500 dark:text-emerald-400' : '' })}
+          <div className={`p-2 rounded-xl text-white ${
+            isMuseSelected
+              ? 'bg-pink-500/20 dark:bg-pink-500/30'
+              : isFlowSelected
+              ? 'bg-emerald-500/20 dark:bg-emerald-500/30'
+              : 'bg-slate-100 dark:bg-white/10 !text-slate-700 dark:!text-white'
+          }`}>
+            {React.createElement(getIcon(selectedModel.id), {
+              size: 18,
+              className: isMuseSelected ? 'text-pink-500 dark:text-pink-400' : isFlowSelected ? 'text-emerald-500 dark:text-emerald-400' : ''
+            })}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -138,6 +189,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               {selectedModel.tier === 'flow' && (
                 <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 font-black uppercase tracking-tighter">
                   FLOW
+                </span>
+              )}
+              {isMuseSelected && (
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-pink-500/20 text-pink-600 dark:text-pink-300 font-black uppercase tracking-tighter">
+                  MUSE
                 </span>
               )}
             </div>
@@ -186,6 +242,29 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   {flowBackendOnline === false && (
                     <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold normal-case">
                       Local
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => setActiveTab('muse')}
+                  className={`flex-1 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
+                    activeTab === 'muse'
+                      ? 'text-pink-600 dark:text-pink-400 bg-pink-50 dark:bg-pink-500/10 border-b-2 border-pink-500'
+                      : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <span>✨ Muse AI</span>
+                  {museAccountsCount > 0 ? (
+                    <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold normal-case">
+                      {museAccountsCount}
+                    </span>
+                  ) : museBackendOnline === false ? (
+                    <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-slate-500/20 text-slate-500 font-bold normal-case">
+                      Off
+                    </span>
+                  ) : (
+                    <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold normal-case">
+                      Cookie
                     </span>
                   )}
                 </button>
@@ -354,7 +433,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       </div>
                     </div>
 
-                    {/* Nhóm Mô hình Video */}
+                    {/* Nhóm Mô hình Video (chỉ hiển thị khi filterType !== 'image') */}
+                    {filterType !== 'image' && (
                     <div>
                       <div className="px-3 py-1 text-[9px] font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
                         <Video size={12} /> Mô hình Tạo Video (Veo & Omni)
@@ -399,6 +479,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         })}
                       </div>
                     </div>
+                    )}
                   </div>
 
                   {/* Setup Guide */}
@@ -410,6 +491,88 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <p className="text-[9px] text-slate-500 dark:text-slate-400 font-mono bg-black/5 dark:bg-white/5 rounded px-2 py-1">pip install -r requirements.txt</p>
                       <p className="text-[9px] text-slate-500 dark:text-slate-400 font-mono bg-black/5 dark:bg-white/5 rounded px-2 py-1">uvicorn app:app --port 8000</p>
                     </div>
+                  </div>
+                </>
+              )}
+
+              {/* Muse AI Tab Content */}
+              {activeTab === 'muse' && (
+                <>
+                  <div className="mx-3 mt-3 mb-2 p-3 rounded-xl bg-pink-50 dark:bg-pink-950/20 border border-pink-200 dark:border-pink-800/30">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-bold text-pink-700 dark:text-pink-300 mb-0.5">
+                          Muse.ai (muse2api)
+                        </p>
+                        <p className="text-[9px] text-pink-600 dark:text-pink-400 leading-relaxed">
+                          Tạo ảnh, video điện ảnh (5s-10s) và prompt qua tài khoản Muse. Tự động renew session 48h.
+                        </p>
+                      </div>
+                      <a
+                        href={museAdminUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-pink-600 text-white text-[9px] font-bold shrink-0 hover:bg-pink-700 transition-all shadow-sm"
+                      >
+                        <span>Quản lý Cookie</span>
+                        <ExternalLink size={10} />
+                      </a>
+                    </div>
+                    {museAccountsCount === 0 && (
+                      <div className="mt-2 pt-2 border-t border-pink-200/60 dark:border-pink-800/40 text-[9px] text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                        <span>⚠️ Chưa có tài khoản. Bấm "Quản lý Cookie" để import cookie từ muse.ai.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-1.5 pb-4 max-h-[360px] overflow-y-auto custom-scrollbar space-y-2">
+                    {visibleMuseModels.map((model) => {
+                      const isSelected = selectedModelId === model.id;
+                      const Icon = getIcon(model.id);
+
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => {
+                            onModelSelect(model.id);
+                            setIsOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-all relative group ${
+                            isSelected
+                              ? 'bg-pink-50 dark:bg-pink-500/10 border border-pink-200 dark:border-pink-500/30'
+                              : 'hover:bg-slate-50 dark:hover:bg-white/5'
+                          }`}
+                        >
+                          <div className={`p-1.5 rounded-lg ${isSelected ? 'bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400' : 'bg-slate-100 dark:bg-white/5 text-slate-400 dark:text-slate-400'}`}>
+                            <Icon size={16} />
+                          </div>
+                          <div className="flex-1 min-w-0 text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold truncate text-slate-900 dark:!text-white">
+                                {model.name}
+                              </span>
+                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-pink-500/20 text-pink-600 dark:text-pink-300 font-black uppercase tracking-tighter">
+                                MUSE
+                              </span>
+                            </div>
+                            <p className="text-[9px] text-slate-400 dark:!text-slate-200 truncate">{model.desc}</p>
+                          </div>
+                          {isSelected && (
+                            <div className="w-1.5 h-1.5 rounded-full bg-pink-500 shadow-[0_0_10px_rgba(236,72,153,0.8)] mr-1" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Setup Guide */}
+                  <div className="mx-3 mb-3 p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
+                    <p className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-1.5">⚡ Cách import cookie Muse:</p>
+                    <ol className="text-[9px] text-slate-500 dark:text-slate-400 space-y-1 list-decimal list-inside">
+                      <li>Bấm nút <strong>"Quản lý Cookie"</strong> ở trên để mở trang Admin Muse.</li>
+                      <li>Đăng nhập <a href="https://muse.ai" target="_blank" rel="noreferrer" className="text-pink-500 underline">muse.ai</a> trên Chrome.</li>
+                      <li>Dùng extension hoặc copy cookie dán vào ô Add Account.</li>
+                    </ol>
                   </div>
                 </>
               )}

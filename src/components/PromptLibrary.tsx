@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Plus, Trash2, Sparkles, Copy, Check, X } from 'lucide-react';
 import { STARTER_PROMPTS } from '../constants/starterPrompts';
 import { PromptTemplate, AppMode } from '../types';
@@ -53,20 +53,37 @@ const PromptLibrary: React.FC<{ onSwitchMode: (mode: AppMode) => void }> = ({ on
     localStorage.setItem('yody_hidden_prompt_ids', JSON.stringify(hiddenPromptIds));
   }, [hiddenPromptIds]);
 
-  const allPrompts = [...STARTER_PROMPTS.filter(p => !hiddenPromptIds.includes(p.id)), ...userPrompts];
-  const categories = ['All', ...Array.from(new Set(allPrompts.map(p => p.category)))];
-  const styles = ['All', ...Array.from(new Set(allPrompts.map(p => p.style)))];
-  const lightings = ['All', ...Array.from(new Set(allPrompts.map(p => p.lighting)))];
+  const allPrompts = useMemo(
+    () => [...STARTER_PROMPTS.filter(p => !hiddenPromptIds.includes(p.id)), ...userPrompts],
+    [hiddenPromptIds, userPrompts]
+  );
+  const categories = useMemo(
+    () => ['All', ...Array.from(new Set(allPrompts.map(p => p.category)))],
+    [allPrompts]
+  );
+  const styles = useMemo(
+    () => ['All', ...Array.from(new Set(allPrompts.map(p => p.style)))],
+    [allPrompts]
+  );
+  const lightings = useMemo(
+    () => ['All', ...Array.from(new Set(allPrompts.map(p => p.lighting)))],
+    [allPrompts]
+  );
 
-  const filteredPrompts = allPrompts.filter(p => {
-    const matchesSearch = p.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         p.prompt.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         p.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-    const matchesStyle = selectedStyle === 'All' || p.style === selectedStyle;
-    const matchesLighting = selectedLighting === 'All' || p.lighting === selectedLighting;
-    return matchesSearch && matchesCategory && matchesStyle && matchesLighting;
-  });
+  const filteredPrompts = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return allPrompts.filter(p => {
+      const matchesSearch =
+        !q ||
+        p.title.toLowerCase().includes(q) ||
+        p.prompt.toLowerCase().includes(q) ||
+        p.tags.some(t => t.toLowerCase().includes(q));
+      const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
+      const matchesStyle = selectedStyle === 'All' || p.style === selectedStyle;
+      const matchesLighting = selectedLighting === 'All' || p.lighting === selectedLighting;
+      return matchesSearch && matchesCategory && matchesStyle && matchesLighting;
+    });
+  }, [allPrompts, searchQuery, selectedCategory, selectedStyle, selectedLighting]);
 
   const handleAddPrompt = () => {
     if (!newPrompt.title || !newPrompt.prompt || !newPrompt.imageUrl) {
@@ -259,79 +276,75 @@ const PromptLibrary: React.FC<{ onSwitchMode: (mode: AppMode) => void }> = ({ on
       {/* Grid */}
       <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          <AnimatePresence mode="popLayout">
-            {filteredPrompts.map((p) => (
-              <motion.div
-                key={p.id}
-                layout
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="group relative bg-white/5 border border-white/10 rounded-[2rem] overflow-hidden backdrop-blur-md hover:border-blue-500/30 transition-all"
-              >
-                {/* Image Preview */}
-                <div className="aspect-[3/4] overflow-hidden relative">
-                  <img 
-                    src={p.imageUrl} 
-                    alt={p.title} 
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-6">
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleUsePrompt(p.prompt)}
-                        className="flex-1 bg-white text-black py-3 rounded-xl font-black uppercase text-[10px] hover:bg-blue-500 hover:text-white transition-colors flex items-center justify-center gap-2"
-                      >
-                        <Sparkles size={14} />
-                        Sử Dụng
-                      </button>
-                      <button 
-                        onClick={() => copyToClipboard(p.prompt, p.id)}
-                        className="p-3 bg-white/20 backdrop-blur-md rounded-xl text-white hover:bg-white/30 transition-colors"
-                      >
-                        {copiedId === p.id ? <Check size={16} /> : <Copy size={16} />}
-                      </button>
-                    </div>
-                  </div>
-                  
-                  {/* Category Tag */}
-                  <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full border border-white/10 text-[8px] font-black text-white uppercase tracking-widest">
-                    {p.category}
-                  </div>
-                  
-                  {/* Actions */}
-                  <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          {filteredPrompts.map((p) => (
+            <div
+              key={p.id}
+              className="cv-card group relative bg-white/5 border border-white/10 rounded-[2rem] overflow-hidden hover:border-blue-500/30 transition-colors"
+            >
+              {/* Image Preview */}
+              <div className="aspect-[3/4] overflow-hidden relative bg-slate-900/60">
+                <img 
+                  src={p.imageUrl} 
+                  alt={p.title} 
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-6">
+                  <div className="flex gap-2">
                     <button 
-                      onClick={() => handleEditPrompt(p)}
-                      className="p-2 bg-blue-500/20 backdrop-blur-md rounded-xl text-blue-400 border border-blue-500/20 hover:bg-blue-500 hover:text-white transition-all"
-                      title="Chỉnh sửa"
+                      onClick={() => handleUsePrompt(p.prompt)}
+                      className="flex-1 bg-white text-black py-3 rounded-xl font-black uppercase text-[10px] hover:bg-blue-500 hover:text-white transition-colors flex items-center justify-center gap-2"
                     >
-                      <Plus size={14} className="rotate-45" />
+                      <Sparkles size={14} />
+                      Sử Dụng
                     </button>
                     <button 
-                      onClick={() => handleDeletePrompt(p.id)}
-                      className="p-2 bg-red-500/20 backdrop-blur-md rounded-xl text-red-400 border border-red-500/20 hover:bg-red-500 hover:text-white transition-all"
-                      title="Xóa"
+                      onClick={() => copyToClipboard(p.prompt, p.id)}
+                      className="p-3 bg-white/20 rounded-xl text-white hover:bg-white/30 transition-colors"
                     >
-                      <Trash2 size={14} />
+                      {copiedId === p.id ? <Check size={16} /> : <Copy size={16} />}
                     </button>
                   </div>
                 </div>
+                
+                {/* Category Tag */}
+                <div className="absolute top-4 left-4 px-3 py-1 bg-black/60 rounded-full border border-white/10 text-[8px] font-black text-white uppercase tracking-widest">
+                  {p.category}
+                </div>
+                
+                {/* Actions */}
+                <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={() => handleEditPrompt(p)}
+                    className="p-2 bg-blue-500/20 rounded-xl text-blue-400 border border-blue-500/20 hover:bg-blue-500 hover:text-white transition-colors"
+                    title="Chỉnh sửa"
+                  >
+                    <Plus size={14} className="rotate-45" />
+                  </button>
+                  <button 
+                    onClick={() => handleDeletePrompt(p.id)}
+                    className="p-2 bg-red-500/20 rounded-xl text-red-400 border border-red-500/20 hover:bg-red-500 hover:text-white transition-colors"
+                    title="Xóa"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
 
-                {/* Info */}
-                <div className="p-5">
-                  <h3 className="font-black text-sm text-white mb-2 truncate group-hover:text-blue-400 transition-colors uppercase tracking-tight">{p.title}</h3>
-                  <p className="text-[10px] text-slate-400 line-clamp-2 mb-4 font-medium leading-relaxed italic">"{p.prompt}"</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {p.tags.slice(0, 3).map(tag => (
-                      <span key={tag} className="px-2 py-0.5 bg-white/5 rounded-md text-[8px] text-slate-500 font-bold uppercase tracking-tighter border border-white/5">#{tag}</span>
-                    ))}
-                  </div>
+              {/* Info */}
+              <div className="p-5">
+                <h3 className="font-black text-sm text-white mb-2 truncate group-hover:text-blue-400 transition-colors uppercase tracking-tight">{p.title}</h3>
+                <p className="text-[10px] text-slate-400 line-clamp-2 mb-4 font-medium leading-relaxed italic">"{p.prompt}"</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {p.tags.slice(0, 3).map(tag => (
+                    <span key={tag} className="px-2 py-0.5 bg-white/5 rounded-md text-[8px] text-slate-500 font-bold uppercase tracking-tighter border border-white/5">#{tag}</span>
+                  ))}
                 </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+              </div>
+            </div>
+          ))}
         </div>
         
         {filteredPrompts.length === 0 && (

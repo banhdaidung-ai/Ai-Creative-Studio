@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line } from 'react-konva';
-import { MousePointer2, Eraser, Pen, X, Check, Save } from 'lucide-react';
+import { Eraser, Pen, X, Check } from 'lucide-react';
 
 interface MaskDrawEditorProps {
     imageSrc: string; // base64 string

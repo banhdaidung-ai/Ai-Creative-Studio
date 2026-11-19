@@ -53,6 +53,109 @@ export const formatImageSrc = (img?: string | null): string => {
   return `data:image/png;base64,${trimmed}`;
 };
 
+/**
+ * Tạo ảnh thumbnail siêu nhẹ (WebP/JPEG max 480px) để hiển thị mượt trong danh sách
+ * lịch sử/thư viện mà không giải mã hàng chục MB Base64 trên Main Thread.
+ * Nếu nguồn đã là URL mạng hoặc chuỗi rất nhẹ (< 60KB), trả lại nguyên bản.
+ */
+export const createThumbnail = async (
+  src: string,
+  maxSize: number = 480,
+  quality: number = 0.78
+): Promise<string> => {
+  if (!src) return src;
+  const trimmed = src.trim();
+
+  // Remote/relative URLs or small data URIs do not need re-encoding
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    (trimmed.startsWith('/') && trimmed.length < 500 && !trimmed.startsWith('/9j/')) ||
+    trimmed.length < 60_000
+  ) {
+    return src;
+  }
+
+  const normalized = formatImageSrc(trimmed);
+  try {
+    const res = await fetch(normalized);
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) return src;
+
+    if (typeof createImageBitmap === 'function') {
+      const bitmap = await createImageBitmap(blob);
+      try {
+        let w = bitmap.width;
+        let h = bitmap.height;
+        if (w <= maxSize && h <= maxSize && trimmed.length < 180_000) {
+          return normalized;
+        }
+        if (w > h) {
+          if (w > maxSize) {
+            h = Math.round((h * maxSize) / w);
+            w = maxSize;
+          }
+        } else if (h > maxSize) {
+          w = Math.round((w * maxSize) / h);
+          h = maxSize;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return normalized;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'medium';
+        ctx.drawImage(bitmap, 0, 0, w, h);
+
+        const webp = canvas.toDataURL('image/webp', quality);
+        if (webp.startsWith('data:image/webp')) {
+          return webp;
+        }
+        return canvas.toDataURL('image/jpeg', quality);
+      } finally {
+        bitmap.close();
+      }
+    }
+
+    return await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let w = img.width;
+          let h = img.height;
+          if (w > h) {
+            if (w > maxSize) {
+              h = Math.round((h * maxSize) / w);
+              w = maxSize;
+            }
+          } else if (h > maxSize) {
+            w = Math.round((w * maxSize) / h);
+            h = maxSize;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, w);
+          canvas.height = Math.max(1, h);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(normalized);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(normalized);
+        }
+      };
+      img.onerror = () => resolve(normalized);
+      img.src = normalized;
+    });
+  } catch {
+    return normalized;
+  }
+};
+
 export const extractRatioFromPrompt = (prompt: string): string | null => {
   const match = prompt.match(/(?:--ar|--aspect|ratio|tỷ lệ|aspect ratio)\s*[:=]?\s*(\d+[:/x]\d+)/i);
   if (match) {

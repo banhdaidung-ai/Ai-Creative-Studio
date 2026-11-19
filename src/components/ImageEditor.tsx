@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
-import { geminiService } from '../services/gemini';
-import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
+import { geminiService, hasRealGeminiCredentials } from '../services/gemini';
+import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP, isLanOrLocalHostname, buildFlowUnavailableMessage } from '../services/flowService';
 import { isMuseModel, generateImageViaMuse } from '../services/museService';
 import { resizeImage, smoothImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
 import { saveState, loadState } from '../utils/storage';
@@ -424,8 +424,8 @@ const ImageEditor: React.FC = () => {
           isLocalFlowActive = false;
         }
 
-        // Tự động kích hoạt Local Backend nếu chưa mở
-        if (!isLocalFlowActive) {
+        // Tự động kích hoạt Local Backend nếu đang ở Local/LAN và chưa mở
+        if (!isLocalFlowActive && isLanOrLocalHostname(window.location.hostname)) {
           try {
             setLoadingMessage("Đang khởi động Google Flow Local Backend...");
             await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
@@ -491,20 +491,16 @@ const ImageEditor: React.FC = () => {
             throw new Error("Google Flow không trả về ảnh.");
           }
         } else {
-          // Khi không có backend local (ví dụ chạy trên web online hoặc chưa cài python):
-          // Kiểm tra xem có Gemini API key không để fallback thông minh
+          // Khi không kết nối được Flow Backend: chỉ fallback sang Gemini nếu thực sự có Gemini API Key / Vertex / Server Key
           const fallbackModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-3.1-flash-image';
-          const hasKey = apiKeySelected || !!localStorage.getItem('gemini_api_key') || (typeof window !== 'undefined' && !!(window as any).aistudio);
-          if (hasKey) {
-            toast.info(`⚡ Google Flow Local chưa bật, đang tự động chuyển tiếp sang mô hình ${fallbackModel} để tạo ảnh cho sếp...`);
+          const canFallbackGemini = await hasRealGeminiCredentials();
+          if (canFallbackGemini) {
+            toast.info(`⚡ Google Flow Backend chưa kết nối, đang tự động chuyển tiếp sang mô hình ${fallbackModel} để tạo ảnh...`);
             effectiveModelId = fallbackModel;
             // Chạy tiếp luồng Gemini bên dưới!
           } else {
-            window.dispatchEvent(new Event('open_unlock_modal'));
-            throw new Error(
-              'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa chạy trên máy. ' +
-              'Vui lòng nhấn nút "💻 Bật Local Backend" bên dưới hoặc cấu hình API Key / Tài khoản Google để tạo ảnh trực tuyến.'
-            );
+            window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'flow' } }));
+            throw new Error(buildFlowUnavailableMessage());
           }
         }
       }
@@ -1103,17 +1099,23 @@ const ImageEditor: React.FC = () => {
 
                             {/* Quick Action Buttons */}
                             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-red-500/10">
+                              {!isLanOrLocalHostname(window.location.hostname) && error.includes('FLOW_BACKEND_UNAVAILABLE') && (
+                                <a
+                                  href="http://localhost:3000/#image-editor"
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
+                                >
+                                  🖥️ Mở bản Local (localhost:3000)
+                                </a>
+                              )}
+
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setSelectedModelId(FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
-                                  localStorage.setItem('last_selected_model', FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
-                                  setError(null);
-                                  toast.success('Đã chuyển sang mô hình Google Flow (Nano Banana Pro)!');
+                                  window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'flow' } }));
                                 }}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
+                                className="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
                               >
-                                🍌 Dùng Google Flow (Nano Banana Pro)
+                                🌐 Cấu hình Google Flow URL
                               </button>
 
                               <button
@@ -1121,18 +1123,15 @@ const ImageEditor: React.FC = () => {
                                 onClick={() => {
                                   setSelectedModelId('gemini-3.1-flash-image');
                                   setError(null);
-                                  toast.success('Đã chuyển sang mô hình Gemini API (Nano Banana 2). Bạn có thể bấm Tạo ảnh ngay!');
-                                  if (!apiKeySelected) {
-                                    window.dispatchEvent(new Event('open_unlock_modal'));
-                                  }
+                                  window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'google' } }));
                                 }}
                                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95"
                               >
                                 <Sparkles size={13} />
-                                Chuyển sang Gemini API (Nano Banana 2)
+                                Nhập Gemini API Key (Dùng trên Web)
                               </button>
 
-                              {usingFlow && (
+                              {usingFlow && isLanOrLocalHostname(window.location.hostname) && (
                                 <button
                                   type="button"
                                   onClick={() => {

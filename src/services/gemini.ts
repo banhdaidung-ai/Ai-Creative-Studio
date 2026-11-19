@@ -25,6 +25,41 @@ export const MODEL_OPTIONS = [
   { id: 'imagen-4.0-generate-001', name: 'Imagen 4 (API)', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
 ];
 
+import { fetchSystemInfo } from './museService';
+
+/**
+ * Kiểm tra đồng bộ xem trình duyệt có cấu hình Gemini API Key hoặc Vertex AI thật hay không
+ * (KHÔNG tính cờ google_account_pro vốn chỉ báo hiệu đăng nhập Firebase Google Auth).
+ */
+export function hasSyncGeminiCredentials(): boolean {
+  if (typeof window === 'undefined') return false;
+  const key = (localStorage.getItem('gemini_api_key') || '').trim();
+  const validKey = key.length >= 25 && (key.startsWith('AIza') || key.startsWith('AQ.'));
+  const hasVertex = Boolean(
+    localStorage.getItem('vertex_project_id')?.trim() &&
+    localStorage.getItem('vertex_access_token')?.trim()
+  );
+  return validKey || hasVertex;
+}
+
+/**
+ * Kiểm tra đầy đủ xem ứng dụng thực sự có thể gọi Gemini API hay không
+ * (bao gồm API Key cá nhân, Vertex AI, Server GEMINI_API_KEY, hoặc Google AI Studio host).
+ */
+export async function hasRealGeminiCredentials(): Promise<boolean> {
+  if (hasSyncGeminiCredentials()) return true;
+  if (typeof window !== 'undefined' && (window as any).aistudio?.hasSelectedApiKey) {
+    try {
+      const selected = await (window as any).aistudio.hasSelectedApiKey();
+      if (selected) return true;
+    } catch {
+      // Ignore
+    }
+  }
+  const sysInfo = await fetchSystemInfo();
+  return Boolean(sysInfo?.hasServerGeminiKey);
+}
+
 export class GeminiService {
   private async rpc(method: string, args: any[]) {
       const customKey = localStorage.getItem('gemini_api_key') || undefined;

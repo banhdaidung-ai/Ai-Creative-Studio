@@ -52,10 +52,31 @@ GOOGLE_PASSWORD = os.getenv("GOOGLE_PASSWORD", "")
 MEDIA_DIR = Path(__file__).parent.parent / "media_cache"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Singleton browser instance
+# Singleton browser instance & concurrency lock
 _playwright: Optional[Playwright] = None
 _browser: Optional[Browser] = None
 _context: Optional[BrowserContext] = None
+_flow_lock: Optional[asyncio.Lock] = None
+_flow_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _get_flow_lock() -> asyncio.Lock:
+    """Lấy asyncio.Lock gắn với event loop hiện tại để tuần tự hóa các job Playwright."""
+    global _flow_lock, _flow_lock_loop
+    loop = asyncio.get_running_loop()
+    if _flow_lock is None or _flow_lock_loop is not loop:
+        _flow_lock = asyncio.Lock()
+        _flow_lock_loop = loop
+    return _flow_lock
+
+
+def _upgrade_fife_url(url: str) -> str:
+    """
+    Nâng URL ảnh Google Flow FIFE từ thumbnail (=s512-rw) lên độ phân giải gốc đầy đủ (=s0).
+    """
+    if url.startswith("https://") and ("/asb/" in url or "googleusercontent.com" in url):
+        return re.sub(r"=s\d+[^/?#]*$", "=s0", url)
+    return url
 
 # Google Flow hỗ trợ 5 tỉ lệ khung hình nguyên bản:
 FLOW_NATIVE_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"]
@@ -845,6 +866,31 @@ async def generate_image_on_flow(
     Tạo ảnh trên Google Flow sử dụng các model Nano Banana Pro / 2 / 2 Lite.
     Hỗ trợ đa ảnh tham chiếu: Ảnh người mẫu (model_image_path) + Các ảnh bối cảnh/trang phục (reference_image_paths).
     """
+    async with _get_flow_lock():
+        return await _generate_image_on_flow_locked(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            num_images=num_images,
+            reference_image_path=reference_image_path,
+            job_id=job_id,
+            model=model,
+            progress_callback=progress_callback,
+            model_image_path=model_image_path,
+            reference_image_paths=reference_image_paths,
+        )
+
+
+async def _generate_image_on_flow_locked(
+    prompt: str,
+    aspect_ratio: str = "1:1",
+    num_images: int = 1,
+    reference_image_path: Optional[str] = None,
+    job_id: str = "",
+    model: str = "google-flow-nano-banana-pro",
+    progress_callback=None,
+    model_image_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
+) -> list[dict]:
     context = await get_browser_context()
     page = await context.new_page()
 
@@ -1016,6 +1062,7 @@ async def _wait_for_new_images(
 
     while time.time() - start < timeout:
         elapsed = time.time() - start
+        progress = max(progress_step, min(60 + int((elapsed / timeout) * 35), 95))
 
         # Kiểm tra xem trên canvas có tile nào đang render (%) hoặc spinner không
         render_status = await page.evaluate('''() => {
@@ -1138,7 +1185,10 @@ async def _wait_for_new_images(
             for candidate in new_candidates:
                 src = candidate['src']
                 try:
-                    resp = await page.request.get(src)
+                    full_src = _upgrade_fife_url(src)
+                    resp = await page.request.get(full_src)
+                    if resp.status != 200 and full_src != src:
+                        resp = await page.request.get(src)
                     if resp.status == 200:
                         body = await resp.body()
 
@@ -1210,6 +1260,27 @@ async def generate_video_on_flow(
     Hỗ trợ text-to-video và image-to-video.
     Trả về URL video (data URI hoặc http://.../media/...).
     """
+    async with _get_flow_lock():
+        return await _generate_video_on_flow_locked(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            duration=duration,
+            reference_image_path=reference_image_path,
+            job_id=job_id,
+            model=model,
+            progress_callback=progress_callback,
+        )
+
+
+async def _generate_video_on_flow_locked(
+    prompt: str,
+    aspect_ratio: str = "16:9",
+    duration: int = 5,
+    reference_image_path: Optional[str] = None,
+    job_id: str = "",
+    model: str = "google-flow-veo-quality",
+    progress_callback=None,
+) -> Optional[str]:
     context = await get_browser_context()
     page = await context.new_page()
 
@@ -1254,7 +1325,7 @@ async def generate_video_on_flow(
         if reference_image_path and Path(reference_image_path).exists():
             if progress_callback:
                 await progress_callback(job_id, 45, "Đang tải ảnh tham chiếu lên Google Flow...")
-            ref_urls = await _upload_reference_image(page, reference_image_path)
+            ref_urls = await _upload_single_reference_image(page, reference_image_path)
             await asyncio.sleep(1.2)
 
         # Dọn sạch bất kỳ backdrop/overlay nào có thể che chắn pointer events

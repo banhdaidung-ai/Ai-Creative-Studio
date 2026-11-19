@@ -7,7 +7,7 @@ import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
-import { isFlowBackendAvailable, invalidateFlowHealthCache } from '../services/flowService';
+import { isFlowBackendAvailable, invalidateFlowHealthCache, isLanOrLocalHostname } from '../services/flowService';
 import { getMuseReadyStatus, fetchSystemInfo, getMuseAdminUrl } from '../services/museService';
 
 interface LayoutProps {
@@ -141,7 +141,10 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   };
 
   useEffect(() => {
-    const onOpenUnlock = () => handleOpenUnlock();
+    const onOpenUnlock = (e: Event) => {
+      const custom = e as CustomEvent<{ tab?: 'google' | 'vertex' | 'flow' | 'muse' }>;
+      handleOpenUnlock(custom?.detail?.tab);
+    };
     window.addEventListener('open_unlock_modal', onOpenUnlock);
     return () => window.removeEventListener('open_unlock_modal', onOpenUnlock);
   }, [handleOpenUnlock]);
@@ -657,13 +660,26 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                             />
                                         </div>
 
-                                        <div className="p-2.5 bg-white/5 rounded-xl border border-white/5 text-[9px] text-slate-400 space-y-1 leading-relaxed">
-                                            <p className="text-slate-300 font-bold flex items-center gap-1">
-                                                <Wifi className="w-3 h-3 text-emerald-400" />
-                                                Mở trên máy khác cùng Wi-Fi:
-                                            </p>
-                                            <p>Truy cập vào địa chỉ IP mạng của máy chủ: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">{networkUrl || window.location.origin}</code></p>
-                                            <p className="text-slate-500 text-[8px]">Hệ thống sẽ tự động chuyển tiếp yêu cầu đến Google Flow Backend trên máy Mac.</p>
+                                        <div className="p-2.5 bg-white/5 rounded-xl border border-white/5 text-[9px] text-slate-400 space-y-1.5 leading-relaxed">
+                                            {!isLanOrLocalHostname(window.location.hostname) ? (
+                                              <>
+                                                <p className="text-amber-300 font-bold flex items-center gap-1">
+                                                    <Globe className="w-3 h-3 text-amber-400" />
+                                                    Đang mở từ Web Online ({window.location.hostname}):
+                                                </p>
+                                                <p>• Trên máy Mac đang chạy backend: mở trực tiếp <a href="http://localhost:3000" className="text-emerald-400 underline font-bold">http://localhost:3000</a>, hoặc bấm biểu tượng ổ khóa trên thanh URL Chrome → bật <strong>Local network access = Allow</strong>.</p>
+                                                <p>• Truy cập từ xa 24/7: dán địa chỉ HTTPS Cloud Run / Cloudflare Tunnel vào ô Backend URL ở trên.</p>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <p className="text-slate-300 font-bold flex items-center gap-1">
+                                                    <Wifi className="w-3 h-3 text-emerald-400" />
+                                                    Mở trên máy khác cùng Wi-Fi:
+                                                </p>
+                                                <p>Truy cập vào địa chỉ IP mạng của máy chủ: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">{networkUrl || window.location.origin}</code></p>
+                                                <p className="text-slate-500 text-[8px]">Hệ thống sẽ tự động chuyển tiếp yêu cầu đến Google Flow Backend trên máy Mac.</p>
+                                              </>
+                                            )}
                                         </div>
 
                                         <div className="flex gap-2">

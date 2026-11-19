@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
-import { geminiService, MODEL_OPTIONS } from '../services/gemini';
-import { generateImageViaFlow, isFlowModel, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP } from '../services/flowService';
+import { geminiService, MODEL_OPTIONS, hasRealGeminiCredentials } from '../services/gemini';
+import { generateImageViaFlow, isFlowModel, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP, buildFlowUnavailableMessage } from '../services/flowService';
 import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
@@ -411,9 +411,9 @@ const BatchFashionStudio: React.FC = () => {
                     },
                     (prog, msg) => statusUpdate(msg || `Google Flow (${prog}%)`)
                 );
-            } else if (apiKeySelected) {
+            } else if (await hasRealGeminiCredentials()) {
                 const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
-                toast.info(`Google Flow chưa bật, tự động dùng ${fallbackModel}...`);
+                toast.info(`Google Flow chưa kết nối, tự động dùng ${fallbackModel}...`);
                 result = await geminiService.editImage(
                     modelImage,
                     job.prompt,
@@ -421,7 +421,8 @@ const BatchFashionStudio: React.FC = () => {
                     { modelId: fallbackModel, aspectRatio, imageSize }
                 );
             } else {
-                throw new Error('Google Flow Backend chưa sẵn sàng. Vui lòng bật backend hoặc nhập Gemini API Key.');
+                window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'flow' } }));
+                throw new Error(buildFlowUnavailableMessage().replace('FLOW_BACKEND_UNAVAILABLE: ', ''));
             }
         } else {
             statusTimers.push(setTimeout(() => statusUpdate('Đang phân tích trang phục...'), 1500));

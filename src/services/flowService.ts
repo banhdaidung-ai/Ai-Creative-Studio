@@ -137,6 +137,35 @@ export function isLanOrLocalHostname(hostname?: string): boolean {
   );
 }
 
+/**
+ * Thêm cờ targetAddressSpace: 'loopback' theo chuẩn Chromium Local Network Access
+ * khi trang web chạy trên HTTPS public (ví dụ *.web.app) gọi về 127.0.0.1 / localhost.
+ */
+function withLoopbackInit(url: string, init: RequestInit = {}): RequestInit {
+  if (typeof window !== 'undefined' && !isLanOrLocalHostname(window.location.hostname)) {
+    if (url.includes('127.0.0.1') || url.includes('localhost')) {
+      return { ...init, targetAddressSpace: 'loopback' } as RequestInit;
+    }
+  }
+  return init;
+}
+
+export function buildFlowUnavailableMessage(): string {
+  const isLocal = typeof window === 'undefined' || isLanOrLocalHostname(window.location.hostname);
+  if (!isLocal) {
+    return (
+      'FLOW_BACKEND_UNAVAILABLE: Trang web online chưa kết nối được tới Google Flow Backend. ' +
+      'Để dùng Google Flow: (1) Nếu đang dùng trên máy Mac chạy backend, hãy mở bản Local tại http://localhost:3000 hoặc bật quyền "Local network access = Allow" trên biểu tượng ổ khóa thanh địa chỉ Chrome; ' +
+      '(2) Hoặc nhập URL Cloud Run / Tunnel trong Cấu hình Google Flow; ' +
+      '(3) Hoặc nhập Gemini API Key để tạo ảnh trực tiếp trên web.'
+    );
+  }
+  return (
+    'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa chạy trên máy (cổng 8000). ' +
+    'Vui lòng bấm nút "💻 Bật Local Backend" bên dưới, chạy `npm run dev`, hoặc nhập Gemini API Key.'
+  );
+}
+
 export function getFlowApiUrl(endpoint: string): string {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : undefined;
   const envUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FLOW_BACKEND_URL ? import.meta.env.VITE_FLOW_BACKEND_URL : undefined;
@@ -178,7 +207,8 @@ export async function ensureFlowBackendReady(
   let isReady = await isFlowBackendAvailable();
   if (isReady) return true;
 
-  if (typeof window !== 'undefined') {
+  // Chỉ gọi /api/start-flow-backend khi đang chạy ở môi trường Local/LAN có Node server
+  if (typeof window !== 'undefined' && isLanOrLocalHostname(window.location.hostname)) {
     try {
       if (onProgress) {
         onProgress(8, 'Đang tự động khởi động Google Flow Backend...');
@@ -246,7 +276,8 @@ export async function clearFlowSession(): Promise<void> {
 // ── Job Polling ───────────────────────────────────────────────────────────────
 
 export async function getFlowJobStatus(jobId: string): Promise<FlowJobStatus> {
-  const res = await fetch(getFlowApiUrl(`/job/${jobId}`));
+  const url = getFlowApiUrl(`/job/${jobId}`);
+  const res = await fetch(url, withLoopbackInit(url));
   return parseJsonResponse<FlowJobStatus>(res, `Kiểm tra trạng thái job ${jobId}`);
 }
 
@@ -317,10 +348,14 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
     }
   }
 
-  const res = await fetch(getFlowApiUrl('/generate-image'), {
-    method: 'POST',
-    body: formData,
-  });
+  const submitUrl = getFlowApiUrl('/generate-image');
+  const res = await fetch(
+    submitUrl,
+    withLoopbackInit(submitUrl, {
+      method: 'POST',
+      body: formData,
+    })
+  );
 
   const data = await parseJsonResponse<{ job_id: string }>(res, 'Tạo ảnh qua Google Flow');
   return data.job_id;
@@ -337,11 +372,7 @@ export async function generateImageViaFlow(
   // Tự động kiểm tra và bật backend nếu chưa sẵn sàng
   const ready = await ensureFlowBackendReady(onProgress);
   if (!ready) {
-    throw new Error(
-      'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên máy. ' +
-      'Vui lòng chạy backend ở máy local: `npm run dev:flow` ' +
-      'hoặc chuyển sang mô hình Gemini API (trong mục AI Model Engine).'
-    );
+    throw new Error(buildFlowUnavailableMessage());
   }
 
   if (onProgress) {
@@ -393,10 +424,14 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
     }
   }
 
-  const res = await fetch(getFlowApiUrl('/generate-video'), {
-    method: 'POST',
-    body: formData,
-  });
+  const submitUrl = getFlowApiUrl('/generate-video');
+  const res = await fetch(
+    submitUrl,
+    withLoopbackInit(submitUrl, {
+      method: 'POST',
+      body: formData,
+    })
+  );
 
   const data = await parseJsonResponse<{ job_id: string }>(res, 'Tạo video qua Google Flow');
   return data.job_id;
@@ -412,11 +447,7 @@ export async function generateVideoViaFlow(
 
   const ready = await ensureFlowBackendReady(onProgress);
   if (!ready) {
-    throw new Error(
-      'FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên máy. ' +
-      'Vui lòng chạy backend ở máy local: `npm run dev:flow` ' +
-      'hoặc chuyển sang mô hình Gemini API.'
-    );
+    throw new Error(buildFlowUnavailableMessage());
   }
 
   if (onProgress) {
@@ -476,7 +507,7 @@ export function invalidateFlowHealthCache(): void {
 }
 
 async function probeFlowHealthUrl(url: string, timeoutMs: number): Promise<boolean> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetch(url, withLoopbackInit(url, { signal: AbortSignal.timeout(timeoutMs) }));
   const contentType = res.headers.get('content-type') || '';
   if (res.ok && contentType.includes('application/json')) {
     const data = await res.json().catch(() => null);

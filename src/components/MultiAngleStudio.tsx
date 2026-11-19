@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
-import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS } from '../services/gemini';
+import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS, hasRealGeminiCredentials } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, formatImageSrc } from '../utils/image';
-import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP } from '../services/flowService';
+import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP, buildFlowUnavailableMessage } from '../services/flowService';
 import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { useProject } from '../contexts/ProjectContext';
 import ElapsedTimer from './ElapsedTimer';
@@ -300,11 +300,9 @@ const MultiAngleStudio: React.FC = () => {
                 if (flowResult) {
                     result = flowResult.startsWith('data:') ? flowResult.split(',')[1] : flowResult;
                 }
-            } catch {
-                const hasKey = apiKeySelected || 
-                               localStorage.getItem('gemini_api_key') || 
-                               localStorage.getItem('google_account_pro') === 'true';
-                if (hasKey) {
+            } catch (flowErr: any) {
+                const canFallbackGemini = await hasRealGeminiCredentials();
+                if (canFallbackGemini) {
                     const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
                     toast.info(`Google Flow chưa phản hồi, tự động dùng ${fallbackModel} để hoàn tất góc chụp...`);
                     result = await geminiService.generateSingleAngle(
@@ -318,8 +316,9 @@ const MultiAngleStudio: React.FC = () => {
                         }
                     );
                 } else {
-                    toast.error('Vui lòng kích hoạt API Key để tạo ảnh trên web.');
-                    window.dispatchEvent(new Event('open_unlock_modal'));
+                    const msg = flowErr?.message?.replace('FLOW_BACKEND_UNAVAILABLE: ', '') || buildFlowUnavailableMessage().replace('FLOW_BACKEND_UNAVAILABLE: ', '');
+                    toast.error(msg);
+                    window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'flow' } }));
                     return;
                 }
             }

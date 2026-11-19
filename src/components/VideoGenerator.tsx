@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { geminiService } from '../services/gemini';
-import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable } from '../services/flowService';
+import { geminiService, hasRealGeminiCredentials } from '../services/gemini';
+import { generateVideoViaFlow, FLOW_MODEL_IDS, isFlowBackendAvailable, isLanOrLocalHostname, buildFlowUnavailableMessage } from '../services/flowService';
 import { generateVideoViaMuse, getMuseReadyStatus, fetchMuseAdminUrl, getMuseAdminUrl } from '../services/museService';
 import { Film, Upload, Play, Download, Loader2, AlertCircle, RefreshCw, Wand2, Box, Share2, Sparkles, Globe, X, ExternalLink } from 'lucide-react';
 import { resizeImage } from '../utils/image';
@@ -132,13 +132,13 @@ const VideoGenerator: React.FC = () => {
           isLocalFlowActive = false;
         }
 
-        if (!isLocalFlowActive) {
+        if (!isLocalFlowActive && isLanOrLocalHostname(window.location.hostname)) {
           try {
             setStatus("Đang khởi động Google Flow Local Backend...");
             await fetch('/api/start-flow-backend', { method: 'POST' }).catch(() => null);
             for (let i = 0; i < 7; i++) {
               await new Promise(r => setTimeout(r, 1000));
-              isLocalFlowActive = await isFlowBackendAvailable();
+              isLocalFlowActive = await isFlowBackendAvailable(true);
               if (isLocalFlowActive) break;
             }
           } catch {
@@ -173,14 +173,14 @@ const VideoGenerator: React.FC = () => {
             return;
           }
         } else {
-          // Khi không có backend local, nếu có Gemini key thì fallback sang Veo Cloud
-          const hasKey = apiKeySelected || !!localStorage.getItem('gemini_api_key') || (typeof window !== 'undefined' && !!(window as any).aistudio);
-          if (hasKey) {
-            toast.info('⚡ Google Flow Backend chưa bật, đang tự động chuyển sang mô hình Google Veo Cloud...');
+          // Khi không kết nối được Flow Backend, chỉ fallback sang Veo Cloud nếu có Gemini API Key thật
+          const canFallbackGemini = await hasRealGeminiCredentials();
+          if (canFallbackGemini) {
+            toast.info('⚡ Google Flow Backend chưa kết nối, đang tự động chuyển sang mô hình Google Veo Cloud...');
             // Cho phép chạy tiếp nhánh Gemini Veo bên dưới
           } else {
-            window.dispatchEvent(new Event('open_unlock_modal'));
-            throw new Error('FLOW_BACKEND_UNAVAILABLE: Google Flow Backend chưa khả dụng trên môi trường web này. Vui lòng nhấn "Bật Local Backend" hoặc cấu hình API Key / Tài khoản Google để dùng Google Veo Cloud.');
+            window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'flow' } }));
+            throw new Error(buildFlowUnavailableMessage());
           }
         }
       }

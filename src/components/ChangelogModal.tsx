@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { X, Bell, Calendar, ChevronRight, CheckCircle2 } from 'lucide-react';
 
@@ -12,8 +11,21 @@ export interface UpdateItem {
   details: string[];
 }
 
-// Dữ liệu cập nhật (Mô phỏng Realtime News) - Adjusted to Reality (2025)
 export const APP_UPDATES: UpdateItem[] = [
+  {
+    id: 'upd_300',
+    version: '3.0.0',
+    date: '2026-11-20 21:45',
+    title: 'Ra mắt AI Creative Studio 3.0 — Thế hệ Gemini 4 & Omni 1.2',
+    description: 'Đại nâng cấp toàn diện hệ thống AI Models tháng 11/2026, Video Studio đa khung hình và Dây chuyền sản xuất tự động.',
+    type: 'feature',
+    details: [
+      'Nâng cấp lõi SDK @google/genai 3.6.1 (Interactions API v1) với Gemini 4 Argon / Hydrogen & Nano Banana 2.1 (hỗ trợ ghép tới 14 ảnh tham chiếu, tỷ lệ Banner 21:9, 4:1, 1:4 và Khóa mã màu Hex).',
+      'AI Video Studio 2.0 với Omni 1.2 Flash (Google Flow & API): dựng video 3s–15s độ phân giải tới 4K kèm âm thanh thực, nội suy Khung Đầu–Cuối, giữ đồng nhất 6 ảnh Thành phần và Nối dài video tới 30s.',
+      'Chấm điểm chất lượng tự động AI Auto-QC (Gemini Decision 1), Phối bộ Mix & Match nguyên cây và Xuất trọn gói file .zip theo mã SKU.',
+      'Tách nền Pro tích hợp Hòa trộn Ánh sáng & Bóng đổ AI (Subject Relighting), khôi phục YODY Knowledge tra cứu xu hướng Google Search thời gian thực và Pipeline lồng tiếng Gemini 3.8 TTS.'
+    ]
+  },
   {
     id: 'upd_004',
     version: '2.3.0',
@@ -40,34 +52,6 @@ export const APP_UPDATES: UpdateItem[] = [
       'Bổ sung kiểu gạch chân (Underline) và gạch ngang (Strikethrough).',
       'Tối ưu hóa khả năng hiển thị layer văn bản trên nền tối.'
     ]
-  },
-  {
-    id: 'upd_002',
-    version: '2.1.5',
-    date: '2025-11-20 14:00',
-    title: 'Grid Layout System',
-    description: 'Hệ thống lưới ảnh thông minh và chế độ Multi-select.',
-    type: 'feature',
-    details: [
-      'Kéo thả nhiều ảnh cùng lúc vào khung lưới.',
-      'Chế độ chọn nhiều Frame (Shift + Click) để thay đổi kích thước hàng loạt.',
-      'Thêm các mẫu Layout mới: Top-1-Bottom-2, Left-1-Right-2.',
-      'Tính năng Pan ảnh (giữ Alt + Drag) bên trong khung.'
-    ]
-  },
-  {
-    id: 'upd_001',
-    version: '2.0.0',
-    date: '2025-10-01 08:00',
-    title: 'Official Launch 2.0',
-    description: 'Ra mắt YODY Creative Studio với các tính năng AI cốt lõi.',
-    type: 'improvement',
-    details: [
-      'Tích hợp Gemini 1.5 Pro cho xử lý hình ảnh.',
-      'Tính năng xóa phông nền tự động.',
-      'Gợi ý Prompt thông minh.',
-      'Studio thay đồ ảo (Virtual Try-On).'
-    ]
   }
 ];
 
@@ -82,91 +66,90 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({ isOpen, onClose 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-300">
       <div className="bg-[#0a0a0a] border border-white/10 w-full max-w-2xl max-h-[80vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/10 relative group">
-        
-        {/* Modern Background Effects */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-64 bg-blue-600/10 blur-[100px] rounded-full"></div>
-            <div className="absolute inset-0 bg-[radial-gradient(#ffffff15_1px,transparent_1px)] [background-size:20px_20px] opacity-20"></div>
-        </div>
-
-        {/* Header */}
         <div className="p-6 border-b border-white/5 bg-white/5 backdrop-blur-md flex justify-between items-start relative z-10">
           <div className="flex gap-4">
             <div className="p-3 bg-gradient-to-br from-blue-600 to-cyan-600 rounded-2xl shadow-lg shadow-blue-500/20 ring-1 ring-white/10">
               <Bell className="w-6 h-6 text-white animate-pulse" />
             </div>
             <div>
-              <h2 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 uppercase tracking-wider mb-1">Bản Tin 2025</h2>
-              <p className="text-xs text-slate-400 font-medium">Cập nhật hệ thống & Tính năng mới nhất.</p>
+              <h2 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400 uppercase tracking-wider mb-1">
+                Bản Tin 2026 — Studio 3.0
+              </h2>
+              <p className="text-xs text-slate-400 font-medium">Cập nhật hệ thống & Thế hệ AI Models mới nhất.</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors text-slate-400 hover:text-white">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors text-slate-400 hover:text-white"
+          >
             <X className="w-6 h-6" />
           </button>
         </div>
 
-        {/* Content List */}
         <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar relative z-10">
           {APP_UPDATES.map((item, index) => (
             <div key={item.id} className="relative pl-8 group/item">
-              {/* Timeline Line */}
               {index !== APP_UPDATES.length - 1 && (
-                <div className="absolute left-[11px] top-8 bottom-[-32px] w-[2px] bg-white/5 group-hover/item:bg-blue-500/50 transition-colors duration-500"></div>
+                <div className="absolute left-[11px] top-8 bottom-[-32px] w-[2px] bg-white/5 group-hover/item:bg-blue-500/50 transition-colors duration-500" />
               )}
-              
-              {/* Timeline Dot */}
-              <div className={`absolute left-0 top-1.5 w-6 h-6 rounded-full border-4 border-[#0a0a0a] flex items-center justify-center shadow-md transition-all duration-300 ${index === 0 ? 'bg-blue-500 shadow-blue-500/40 scale-110' : 'bg-slate-700 group-hover/item:bg-slate-500'}`}>
+
+              <div
+                className={`absolute left-0 top-1.5 w-6 h-6 rounded-full border-4 border-[#0a0a0a] flex items-center justify-center shadow-md transition-all duration-300 ${
+                  index === 0 ? 'bg-blue-500 shadow-blue-500/40 scale-110' : 'bg-slate-700 group-hover/item:bg-slate-500'
+                }`}
+              >
                 {index === 0 && <div className="w-2 h-2 bg-white rounded-full animate-ping" />}
               </div>
 
-              <div className="bg-white/5 border border-white/5 rounded-[1.5rem] p-5 hover:bg-white/10 hover:border-blue-500/30 transition-all shadow-lg group-hover/item:translate-x-1 duration-300 relative overflow-hidden">
-                {/* Card Glow Effect */}
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/0 via-blue-500/0 to-blue-500/0 group-hover/item:from-blue-500/5 group-hover/item:to-purple-500/5 transition-all duration-500"></div>
-                
-                <div className="relative z-10">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                    <div className="flex items-center gap-2">
-                        <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border ${
-                        item.type === 'feature' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 
-                        item.type === 'fix' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                        }`}>
-                        {item.type === 'feature' ? 'Feature' : item.type === 'fix' ? 'Bug Fix' : 'Update'}
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-400 bg-black/40 px-2 py-1 rounded-lg border border-white/5">v{item.version}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold bg-black/20 px-2 py-1 rounded-lg">
-                        <Calendar className="w-3 h-3" /> {item.date}
-                    </div>
-                    </div>
+              <div className="bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-white/10 rounded-3xl p-5 transition-all duration-300">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        item.type === 'feature'
+                          ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                          : item.type === 'fix'
+                          ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                          : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      }`}
+                    >
+                      v{item.version}
+                    </span>
+                    <h3 className="font-bold text-white text-base">{item.title}</h3>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-mono bg-black/30 px-2.5 py-1 rounded-lg border border-white/5">
+                    <Calendar className="w-3 h-3" />
+                    {item.date}
+                  </div>
+                </div>
 
-                    <h3 className="text-lg font-bold text-white mb-2">{item.title}</h3>
-                    <p className="text-sm text-slate-300 mb-4 leading-relaxed font-light">{item.description}</p>
+                <p className="text-xs text-slate-300 mb-4 leading-relaxed font-medium">{item.description}</p>
 
-                    <div className="space-y-2 bg-black/20 p-3 rounded-xl border border-white/5">
-                    {item.details.map((detail, idx) => (
-                        <div key={idx} className="flex items-start gap-2.5 text-xs text-slate-400">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
-                        <span>{detail}</span>
-                        </div>
-                    ))}
+                <div className="space-y-2 bg-black/20 rounded-2xl p-3.5 border border-white/5">
+                  {item.details.map((detail, idx) => (
+                    <div key={idx} className="flex items-start gap-2.5 text-xs text-slate-400">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{detail}</span>
                     </div>
+                  ))}
                 </div>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-white/10 bg-[#0a0a0a]/80 backdrop-blur-md flex justify-end relative z-10">
-          <button 
+        <div className="p-4 border-t border-white/5 bg-white/5 backdrop-blur-md flex justify-end relative z-10">
+          <button
+            type="button"
             onClick={onClose}
-            className="px-8 py-3 bg-white text-black hover:bg-blue-50 hover:text-blue-900 rounded-2xl text-xs font-black uppercase tracking-widest transition-all shadow-lg active:scale-95 flex items-center gap-2"
+            className="px-6 py-2.5 bg-white text-black hover:bg-slate-200 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg active:scale-95"
           >
-            Đã Hiểu <ChevronRight className="w-4 h-4" />
+            <span>Bắt đầu trải nghiệm</span>
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </div>
-      <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }`}</style>
     </div>
   );
 };

@@ -139,6 +139,7 @@ async def run_image_generation_job(
     model: str = "google-flow-nano-banana-pro",
     model_image_path: Optional[str] = None,
     reference_image_paths: Optional[list[str]] = None,
+    thinking_level: str = "medium",
 ):
     """Background task: tạo ảnh qua Google Flow."""
     job_store[job_id]["status"] = JobStatus.processing
@@ -155,6 +156,7 @@ async def run_image_generation_job(
             progress_callback=update_job_progress,
             model_image_path=model_image_path,
             reference_image_paths=reference_image_paths,
+            thinking_level=thinking_level,
         )
 
         if not images_raw:
@@ -208,9 +210,13 @@ async def run_video_generation_job(
     aspect_ratio: str,
     duration: int,
     reference_image_path: Optional[str],
-    model: str = "google-flow-veo-quality",
+    model: str = "google-flow-omni-1.2-flash",
+    video_mode: str = "standard",
+    resolution: str = "720p",
+    end_frame_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
 ):
-    """Background task: tạo video qua Google Flow (Veo / Omni)."""
+    """Background task: tạo video qua Google Flow (Omni 1.2 Flash / Veo 3.1 Lite)."""
     job_store[job_id]["status"] = JobStatus.processing
     job_store[job_id]["message"] = f"Đang khởi động Google Flow automation ({model})..."
 
@@ -223,6 +229,10 @@ async def run_video_generation_job(
             job_id=job_id,
             model=model,
             progress_callback=update_job_progress,
+            video_mode=video_mode,
+            resolution=resolution,
+            end_frame_path=end_frame_path,
+            reference_image_paths=reference_image_paths,
         )
 
         if not video_url:
@@ -254,11 +264,19 @@ async def run_video_generation_job(
             "completed_at": time.time(),
         })
     finally:
-        if reference_image_path and Path(reference_image_path).exists():
-            try:
-                Path(reference_image_path).unlink()
-            except Exception:
-                pass
+        cleanup_paths = set()
+        if reference_image_path:
+            cleanup_paths.add(reference_image_path)
+        if end_frame_path:
+            cleanup_paths.add(end_frame_path)
+        if reference_image_paths:
+            cleanup_paths.update(reference_image_paths)
+        for p in cleanup_paths:
+            if p and Path(p).exists():
+                try:
+                    Path(p).unlink()
+                except Exception:
+                    pass
 
 
 # ── API Endpoints ─────────────────────────────────────────────────────────────
@@ -339,6 +357,7 @@ async def generate_image_endpoint(
     aspect_ratio: str = Form("1:1"),
     num_images: int = Form(1),
     model: str = Form("google-flow-nano-banana-pro"),
+    thinking_level: str = Form("medium"),
     reference_image: Optional[UploadFile] = File(None),
     model_image: Optional[UploadFile] = File(None),
     reference_images: Optional[list[UploadFile]] = File(None),
@@ -400,6 +419,7 @@ async def generate_image_endpoint(
         model=model,
         model_image_path=model_image_path,
         reference_image_paths=ref_paths if ref_paths else None,
+        thinking_level=thinking_level,
     )
 
     logger.info(f"🎨 Image Job {job_id[:8]} [{model}] created for: '{prompt[:50]}...'")
@@ -411,19 +431,23 @@ async def generate_image_endpoint(
     }
 
 
-# ── Endpoint: Generate Video (Veo 3.1 / Omni Flash) ───────────────────────────
+# ── Endpoint: Generate Video (Omni 1.2 Flash / Veo 3.1 Lite) ──────────────────
 @app.post("/api/generate-video", tags=["Generation"])
 async def generate_video_endpoint(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
     aspect_ratio: str = Form("16:9"),
-    duration: int = Form(5),
-    model: str = Form("google-flow-veo-quality"),
+    duration: int = Form(8),
+    model: str = Form("google-flow-omni-1.2-flash"),
+    video_mode: str = Form("standard"),
+    resolution: str = Form("720p"),
     reference_image: Optional[UploadFile] = File(None),
+    end_frame_image: Optional[UploadFile] = File(None),
+    reference_images: Optional[list[UploadFile]] = File(None),
 ):
     """
-    Endpoint tạo video chuyên biệt với các mô hình Veo / Omni trên Google Flow.
-    Hỗ trợ text-to-video (prompt) và image-to-video (reference_image), model.
+    Endpoint tạo video chuyên biệt với Omni 1.2 Flash / Veo 3.1 Lite trên Google Flow.
+    Hỗ trợ Text-to-Video, Single-Frame, Start+End Keyframes (Khung hình) và Multi-Image Ingredients (Thành phần).
     """
     if not prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt không được để trống.")
@@ -431,10 +455,28 @@ async def generate_video_endpoint(
     reference_image_path: Optional[str] = None
     if reference_image and reference_image.filename:
         suffix = Path(reference_image.filename).suffix or ".jpg"
-        temp_path = TEMP_UPLOAD_DIR / f"{uuid.uuid4()}{suffix}"
+        temp_path = TEMP_UPLOAD_DIR / f"vstart_{uuid.uuid4()}{suffix}"
         content = await reference_image.read()
         temp_path.write_bytes(content)
         reference_image_path = str(temp_path)
+
+    end_frame_path: Optional[str] = None
+    if end_frame_image and end_frame_image.filename:
+        suffix = Path(end_frame_image.filename).suffix or ".jpg"
+        temp_path = TEMP_UPLOAD_DIR / f"vend_{uuid.uuid4()}{suffix}"
+        content = await end_frame_image.read()
+        temp_path.write_bytes(content)
+        end_frame_path = str(temp_path)
+
+    ref_paths: list[str] = []
+    if reference_images:
+        for ref_file in reference_images:
+            if ref_file and ref_file.filename:
+                suffix = Path(ref_file.filename).suffix or ".jpg"
+                temp_path = TEMP_UPLOAD_DIR / f"ving_{uuid.uuid4()}{suffix}"
+                content = await ref_file.read()
+                temp_path.write_bytes(content)
+                ref_paths.append(str(temp_path))
 
     job_id = str(uuid.uuid4())
     job_store[job_id] = {
@@ -456,6 +498,10 @@ async def generate_video_endpoint(
         duration=duration,
         reference_image_path=reference_image_path,
         model=model,
+        video_mode=video_mode,
+        resolution=resolution,
+        end_frame_path=end_frame_path,
+        reference_image_paths=ref_paths if ref_paths else None,
     )
 
     is_i2v = reference_image_path is not None
@@ -571,20 +617,35 @@ async def cancel_job(job_id: str):
 
 @app.get("/api/models", tags=["Info"])
 async def list_models():
-    """Danh sách model Google Flow sẵn có."""
+    """Danh sách model Google Flow sẵn có (Cập nhật 11/2026)."""
     return {
         "image_models": [
             {
-                "id": "nano-banana-pro",
-                "name": "Nano Banana Pro (Google Flow)",
-                "description": "Tạo ảnh chất lượng cao với model Nano Banana Pro qua Google Flow",
+                "id": "google-flow-nano-banana-pro",
+                "name": "🍌 Nano Banana Pro (Google Flow)",
+                "description": "Tạo ảnh chất lượng Studio cao nhất qua Google Flow",
+            },
+            {
+                "id": "google-flow-nano-banana-2.1",
+                "name": "🍌 Nano Banana 2.1 (Google Flow)",
+                "description": "Mô hình ảnh thế hệ mới nhất, hỗ trợ 3 mức suy luận (Thấp / Trung bình / Cao)",
+            },
+            {
+                "id": "google-flow-nano-banana-2-lite",
+                "name": "🍌 Nano Banana 2 Lite (Google Flow)",
+                "description": "Tốc độ siêu nhanh trên Google Flow",
             },
         ],
         "video_models": [
             {
-                "id": "veo",
-                "name": "Veo (Google Flow)",
-                "description": "Tạo video AI (Text-to-Video & Image-to-Video) với Veo qua Google Flow",
+                "id": "google-flow-omni-1.2-flash",
+                "name": "🔊 Omni 1.2 Flash (Google Flow)",
+                "description": "Tạo video kèm âm thanh thế hệ mới nhất, hỗ trợ Khung hình đầu/cuối và Thành phần",
+            },
+            {
+                "id": "google-flow-veo-lite",
+                "name": "🎈 Veo 3.1 Lite (Google Flow)",
+                "description": "Tạo video tốc độ cao, ổn định trên Google Flow",
             },
         ],
         "source": "Google Flow (Playwright Automation / Session Cookie)",

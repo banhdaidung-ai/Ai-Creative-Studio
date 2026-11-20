@@ -112,18 +112,32 @@ const UserGuide: React.FC = () => {
     },
     {
       id: 'video-generator',
-      title: 'Tạo Video (AI Video)',
+      title: 'AI Video Studio 2.0 (Omni 1.2 Flash & Veo 3.1)',
       icon: Film,
       color: 'text-red-400',
       bg: 'bg-red-500/10',
-      description: 'Biến hình ảnh tĩnh thành video chuyển động mượt mà.',
+      description: 'Dựng video thời trang có âm thanh thực, nội suy Khung Đầu–Cuối, 6 ảnh Thành phần & Nối dài tới 30s.',
       steps: [
-        'Chọn một hình ảnh chất lượng cao làm gốc.',
-        'Nhập mô tả chuyển động (ví dụ: "tóc bay trong gió", "xe đang chạy trên đường").',
-        'Chọn thời lượng và độ phân giải video.',
-        'Nhấn "Tạo Video" và đợi AI xử lý (quá trình này có thể mất vài phút).'
+        'Chọn nền tảng: Google Flow (Omni 1.2 Flash miễn phí qua tài khoản Google), Omni 1.2 API (độ nét tới 4K, 3s–15s) hoặc Muse AI.',
+        'Chọn 1 trong 4 chế độ dựng: Chuẩn (1 ảnh), Đầu & Cuối (nội suy 2 tư thế), 6 Thành phần (giữ đồng nhất mẫu & trang phục) hoặc Nối / Sửa Clip.',
+        'Sử dụng nút "Tối ưu AI" để nâng cấp câu lệnh chuyển động camera và âm thanh sàn diễn.',
+        'Sau khi tạo xong, bấm "Nối dài thêm +5s" hoặc "Đổi bối cảnh / Sửa video" ngay dưới trình phát để hậu kỳ liên tiếp.'
       ],
-      tips: 'Mô tả chuyển động càng cụ thể, kết quả video càng ấn tượng.'
+      tips: 'Chế độ Đầu & Cuối (Keyframes) cực kỳ hiệu quả khi bạn tải 2 góc chụp từ Đa Góc để tạo clip xoay người Lookbook mượt mà.'
+    },
+    {
+      id: 'workflow-trend-3',
+      title: 'Pipeline 3.0, Chấm QC AI & Tra cứu Xu hướng',
+      icon: Layers,
+      color: 'text-emerald-400',
+      bg: 'bg-emerald-500/10',
+      description: 'Tự động hóa dây chuyền hàng loạt SKU, kiểm định Gemini Decision 1, lồng tiếng Gemini 3.8 TTS & nghiên cứu xu hướng Google Search.',
+      steps: [
+        'Trong mục Thay Đồ & Đa Góc: nhập Mã SKU, bấm "Chấm QC AI" để lọc tự động các ảnh đạt chuẩn mặt/vải và bấm "Xuất ZIP" chỉ với 1 chạm.',
+        'Trong mục Workflow: tải lên cả lô 10–20 ảnh ở bước Đầu vào, ghép các bước Tách nền → Ướm đồ → Chấm QC → Video → Lồng tiếng TTS rồi bấm "Chạy Lô".',
+        'Trong mục Xu Hướng AI (YODY Knowledge): hỏi xu hướng thời trang 2026 qua Google Search thời gian thực và bấm "Đưa Concept sang Studio Tạo Ảnh".'
+      ],
+      tips: 'Bật "Khóa mã màu & chất vải chuẩn" trong Tạo Ảnh hoặc Phối Bộ khi cần giữ chính xác 100% mã màu HEX thương hiệu.'
     }
   ];
 

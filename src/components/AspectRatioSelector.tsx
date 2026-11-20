@@ -29,6 +29,15 @@ const RATIO_GROUPS = [
       { ratio: '4:3', name: 'Cảnh quan', desc: 'Ảnh ngang chuẩn' },
       { ratio: '3:2', name: 'Nhiếp ảnh', desc: 'Máy ảnh cơ' },
     ]
+  },
+  {
+    label: 'Banner Thương mại (Nano Banana 2.1)',
+    icon: <ArrowLeftRight className="w-3 h-3" />,
+    items: [
+      { ratio: '21:9', name: 'Cinema Hero', desc: 'Banner đầu trang Web' },
+      { ratio: '4:1', name: 'Billboard Ngang', desc: 'Banner quảng cáo dài' },
+      { ratio: '1:4', name: 'Standee Dọc', desc: 'Banner sảnh / Cửa hàng' },
+    ]
   }
 ];
 

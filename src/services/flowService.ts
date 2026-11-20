@@ -42,6 +42,7 @@ export interface FlowGenerateImageOptions {
   aspectRatio?: string;
   numImages?: number;
   model?: string;
+  thinkingLevel?: 'low' | 'medium' | 'high';
   referenceImageBase64?: string;
   referenceImageMime?: string;
   modelImageBase64?: string;
@@ -54,8 +55,13 @@ export interface FlowGenerateVideoOptions {
   aspectRatio?: string;
   duration?: number;
   model?: string;
+  mode?: 'standard' | 'interpolation' | 'ingredients';
+  resolution?: '360p' | '720p';
   referenceImageBase64?: string;
   referenceImageMime?: string;
+  endFrameBase64?: string;
+  endFrameMime?: string;
+  referenceImagesBase64?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -316,6 +322,9 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
   if (options.model) {
     formData.append('model', options.model);
   }
+  if (options.thinkingLevel) {
+    formData.append('thinking_level', options.thinkingLevel);
+  }
 
   // 1. Ảnh người mẫu chính (nếu có)
   if (options.modelImageBase64) {
@@ -359,6 +368,39 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
 
   const data = await parseJsonResponse<{ job_id: string }>(res, 'Tạo ảnh qua Google Flow');
   return data.job_id;
+}
+
+export async function generateImagesBatchViaFlow(
+  options: FlowGenerateImageOptions,
+  onProgress?: (progress: number, message: string) => void,
+): Promise<string[]> {
+  if (onProgress) {
+    onProgress(5, 'Đang chuẩn bị kết nối Google Flow...');
+  }
+
+  const ready = await ensureFlowBackendReady(onProgress);
+  if (!ready) {
+    throw new Error(buildFlowUnavailableMessage());
+  }
+
+  if (onProgress) {
+    onProgress(15, `Đang gửi yêu cầu tạo ${options.numImages || 1} phương án đến Google Flow...`);
+  }
+
+  const jobId = await submitFlowImageJob(options);
+  const status = await pollFlowJob(jobId, onProgress);
+
+  if (status.status === 'completed') {
+    if (status.result?.images && status.result.images.length > 0) {
+      return status.result.images.map((i) => i.url).filter(Boolean);
+    }
+    if (status.images && status.images.length > 0) {
+      return status.images.map((i) => i.url).filter(Boolean);
+    }
+    if (status.image_url) return [status.image_url];
+  }
+
+  throw new Error(status.error || 'Server không trả về URL ảnh hợp lệ.');
 }
 
 export async function generateImageViaFlow(
@@ -411,9 +453,15 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
   const formData = new FormData();
   formData.append('prompt', options.prompt);
   formData.append('aspect_ratio', options.aspectRatio || '16:9');
-  formData.append('duration', String(options.duration || 5));
+  formData.append('duration', String(options.duration || 8));
   if (options.model) {
     formData.append('model', options.model);
+  }
+  if (options.mode) {
+    formData.append('video_mode', options.mode);
+  }
+  if (options.resolution) {
+    formData.append('resolution', options.resolution);
   }
 
   if (options.referenceImageBase64) {
@@ -421,6 +469,26 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
     const file = await safeImageToFile(options.referenceImageBase64, mime, 'reference.jpg');
     if (file && file.size > 0) {
       formData.append('reference_image', file);
+    }
+  }
+
+  if (options.endFrameBase64) {
+    const mime = options.endFrameMime || 'image/jpeg';
+    const file = await safeImageToFile(options.endFrameBase64, mime, 'end_frame.jpg');
+    if (file && file.size > 0) {
+      formData.append('end_frame_image', file);
+    }
+  }
+
+  if (options.referenceImagesBase64 && options.referenceImagesBase64.length > 0) {
+    for (let i = 0; i < options.referenceImagesBase64.slice(0, 6).length; i++) {
+      const imgBase64 = options.referenceImagesBase64[i];
+      if (imgBase64) {
+        const file = await safeImageToFile(imgBase64, 'image/jpeg', `ingredient_${i}.jpg`);
+        if (file && file.size > 0) {
+          formData.append('reference_images', file);
+        }
+      }
     }
   }
 
@@ -587,20 +655,24 @@ export async function isFlowBackendAvailable(forceRefresh = false): Promise<bool
 // ── Model IDs ─────────────────────────────────────────────────────────────────
 
 export const FLOW_MODEL_IDS = {
-  // Image Models trên Google Flow
+  // Image Models trên Google Flow (Cập nhật 11/2026)
   IMAGE_NANO_BANANA_PRO: 'google-flow-nano-banana-pro',
-  IMAGE_NANO_BANANA_2: 'google-flow-nano-banana-2',
+  IMAGE_NANO_BANANA_2_1: 'google-flow-nano-banana-2.1',
+  IMAGE_NANO_BANANA_2: 'google-flow-nano-banana-2.1', // Backward-compatible alias -> 2.1
   IMAGE_NANO_BANANA_2_LITE: 'google-flow-nano-banana-2-lite',
 
-  // Video Models trên Google Flow
-  VIDEO_VEO_QUALITY: 'google-flow-veo-quality',
-  VIDEO_VEO_FAST: 'google-flow-veo-fast',
+  // Video Models trên Google Flow (Cập nhật trước đợt đóng model cũ 05/12/2026)
+  VIDEO_OMNI_1_2_FLASH: 'google-flow-omni-1.2-flash',
   VIDEO_VEO_LITE: 'google-flow-veo-lite',
-  VIDEO_OMNI_FLASH: 'google-flow-omni-flash',
+
+  // Legacy Video aliases (Tự động điều hướng an toàn sang Omni 1.2 Flash)
+  VIDEO_OMNI_FLASH: 'google-flow-omni-1.2-flash',
+  VIDEO_VEO_QUALITY: 'google-flow-omni-1.2-flash',
+  VIDEO_VEO_FAST: 'google-flow-omni-1.2-flash',
 
   // Backward compatibility alias
   IMAGE: 'google-flow-nano-banana-pro',
-  VIDEO: 'google-flow-veo-quality',
+  VIDEO: 'google-flow-omni-1.2-flash',
 } as const;
 
 export type FlowModelId = (typeof FLOW_MODEL_IDS)[keyof typeof FLOW_MODEL_IDS];
@@ -612,14 +684,15 @@ export function isFlowModel(modelId?: string): boolean {
 
 /**
  * Bản đồ chuyển tiếp tự động từ mô hình Google Flow sang mô hình Cloud Gemini API tương ứng.
- * Giúp người dùng trên web bình thường (không chạy local python backend) vẫn tạo ảnh/video mượt mà!
  */
 export const FLOW_TO_GEMINI_MAP: Record<string, string> = {
-  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO]: 'gemini-3-pro-image',     // Nano Banana Pro
-  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2]: 'gemini-3.1-flash-image',   // Nano Banana 2
-  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_LITE]: 'gemini-3.1-flash-lite-image', // Nano Banana Lite
-  [FLOW_MODEL_IDS.VIDEO_VEO_QUALITY]: 'veo',
-  [FLOW_MODEL_IDS.VIDEO_VEO_FAST]: 'veo',
-  [FLOW_MODEL_IDS.VIDEO_VEO_LITE]: 'veo',
-  [FLOW_MODEL_IDS.VIDEO_OMNI_FLASH]: 'veo',
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO]: 'gemini-3-pro-image',
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_1]: 'gemini-nano-banana-2.1',
+  'google-flow-nano-banana-2': 'gemini-nano-banana-2.1',
+  [FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_LITE]: 'gemini-3.1-flash-lite-image',
+  [FLOW_MODEL_IDS.VIDEO_OMNI_1_2_FLASH]: 'gemini-omni-1.2-flash',
+  [FLOW_MODEL_IDS.VIDEO_VEO_LITE]: 'veo-3.1-lite-generate-preview',
+  'google-flow-omni-flash': 'gemini-omni-1.2-flash',
+  'google-flow-veo-quality': 'gemini-omni-1.2-flash',
+  'google-flow-veo-fast': 'gemini-omni-1.2-flash',
 };

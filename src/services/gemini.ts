@@ -15,15 +15,26 @@ export const ANGLE_CONFIGS = [
 export const MODEL_OPTIONS = [
   // Google Flow Models (Dùng tài khoản Google cá nhân — Không cần API Key)
   { id: 'google-flow-nano-banana-pro', name: '🍌 Nano Banana Pro (Flow)', desc: 'Chất lượng cao nhất của Google Flow — chi tiết cực nét, chuẩn Studio.', tier: 'flow' as any },
-  { id: 'google-flow-nano-banana-2', name: '🍌 Nano Banana 2 (Flow)', desc: 'Chất lượng cao, cân bằng tốc độ của Google Flow.', tier: 'flow' as any },
+  { id: 'google-flow-nano-banana-2.1', name: '🍌 Nano Banana 2.1 (Flow)', desc: 'Mới nhất — cân bằng tốc độ & chất lượng, hỗ trợ mức suy luận Cao.', tier: 'flow' as any },
   { id: 'google-flow-nano-banana-2-lite', name: '🍌 Nano Banana 2 Lite (Flow)', desc: 'Tốc độ siêu nhanh, nhẹ nhàng của Google Flow.', tier: 'flow' as any },
 
-  // Gemini API Models
-  { id: 'gemini-3.1-flash-lite-image', name: 'Nano Banana Lite (API)', desc: 'Tốc độ nhanh, tác vụ cơ bản.', tier: 'standard' },
-  { id: 'gemini-3.1-flash-image', name: 'Nano Banana 2 (API)', desc: 'Chất lượng cao, đa dạng tỉ lệ, tìm kiếm.', tier: 'pro' },
-  { id: 'gemini-3-pro-image', name: 'Nano Banana Pro (API)', desc: 'Chi tiết cao, suy luận phức tạp.', tier: 'pro' },
-  { id: 'imagen-4.0-generate-001', name: 'Imagen 4 (API)', desc: 'Nghệ thuật cao cấp, photorealistic.', tier: 'pro' }
+  // Gemini API Models (Interactions API v1 — @google/genai 3.6+)
+  { id: 'gemini-nano-banana-2.1', name: '🍌 Nano Banana 2.1 (API)', desc: 'Mới nhất — ghép tới 14 ảnh tham chiếu, xuất chuẩn 1K/2K/4K.', tier: 'pro' },
+  { id: 'gemini-3-pro-image', name: '🍌 Nano Banana Pro (API)', desc: 'Chi tiết Studio cao cấp, suy luận bố cục sâu.', tier: 'pro' },
+  { id: 'gemini-3.1-flash-lite-image', name: '🍌 Nano Banana 2 Lite (API)', desc: 'Tốc độ nhanh, tối ưu chi phí hàng loạt.', tier: 'standard' },
+  { id: 'imagen-4.0-generate-001', name: '🎨 Imagen 4 (API)', desc: 'Nghệ thuật cao cấp thuần văn bản, photorealistic.', tier: 'pro' }
 ];
+
+export function normalizeClientModelId(modelId?: string): string {
+  if (!modelId) return 'google-flow-nano-banana-pro';
+  if (modelId === 'gemini-3.1-flash-image') return 'gemini-nano-banana-2.1';
+  if (modelId === 'gemini-2.5-flash-image') return 'gemini-3.1-flash-lite-image';
+  if (modelId === 'google-flow-nano-banana-2') return 'google-flow-nano-banana-2.1';
+  if (modelId === 'google-flow-omni-flash' || modelId === 'google-flow-veo-quality' || modelId === 'google-flow-veo-fast') {
+    return 'google-flow-omni-1.2-flash';
+  }
+  return modelId;
+}
 
 import { fetchSystemInfo } from './museService';
 
@@ -115,7 +126,7 @@ export class GeminiService {
     return this.rpc('analyzeFashionImage', [imageBase64]);
   }
 
-  async reviewImage(imageBase64: string): Promise<{ pass: boolean, reason?: string }> {
+  async reviewImage(imageBase64: string): Promise<{ pass: boolean; score?: number; reason?: string }> {
     return this.rpc('reviewImage', [imageBase64]);
   }
 
@@ -169,8 +180,21 @@ export class GeminiService {
     return dataUri;
   }
 
-  async searchChat(prompt: string): Promise<any> {
-    return this.rpc('searchChat', [prompt]);
+  async searchChat(prompt: string, previousInteractionId?: string): Promise<any> {
+    return this.rpc('searchChat', [prompt, previousInteractionId]);
+  }
+
+  async relightSubjectWithBackground(
+    subjectBase64: string,
+    bgPromptOrImage: string,
+    isBgImage = false,
+    aspectRatio = '3:4'
+  ): Promise<string | undefined> {
+    return this.rpc('relightSubjectWithBackground', [subjectBase64, bgPromptOrImage, isBgImage, aspectRatio]);
+  }
+
+  async generateVoiceoverTTS(scriptText: string, voiceStyle?: string, voiceName?: string): Promise<string> {
+    return this.rpc('generateVoiceoverTTS', [scriptText, voiceStyle, voiceName]);
   }
 
   async generateCreativePrompts(ideaDescription: string, referenceImages: string[]): Promise<any> {

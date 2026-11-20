@@ -284,6 +284,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
     {
       label: 'Hỗ trợ',
       items: [
+        { mode: AppMode.SEARCH_CHAT, label: 'Xu Hướng AI', icon: Globe, color: 'text-teal-400', gradient: 'from-emerald-500 to-teal-600', shadow: 'shadow-teal-500/40', animate: 'group-hover:rotate-12 transition-transform' },
         { mode: AppMode.PROMPT_LIBRARY, label: 'Thư Viện', icon: Grid, color: 'text-orange-400', gradient: 'from-orange-500 to-red-600', shadow: 'shadow-orange-500/40', animate: 'group-hover:scale-110 transition-transform' },
         { mode: AppMode.HISTORY, label: 'Lịch Sử', icon: History, color: 'text-indigo-400', gradient: 'from-indigo-500 to-purple-600', shadow: 'shadow-indigo-500/40', animate: 'group-hover:rotate-12 transition-transform' },
         { mode: AppMode.GUIDE, label: 'Hướng Dẫn', icon: HelpCircle, color: 'text-emerald-400', gradient: 'from-emerald-500 to-teal-600', shadow: 'shadow-emerald-500/40', animate: 'group-hover:rotate-12 transition-transform' },

@@ -1,6 +1,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { geminiService } from '../services/gemini';
+import { geminiService, hasRealGeminiCredentials } from '../services/gemini';
+import { generateImageViaFlow, isFlowBackendAvailable, FLOW_MODEL_IDS } from '../services/flowService';
+import { downloadAsZip } from '../utils/zipExport';
 import { 
   Upload, Eraser, Download, Loader2, AlertCircle, CheckCircle2, 
   RefreshCw, Box, X, Palette, Image as ImageIcon, 
@@ -67,6 +69,7 @@ const BackgroundRemover: React.FC = () => {
   const [bgImage, setBgImage] = useState<string | null>(null);
   const [bgPrompt, setBgPrompt] = useState('');
   const [isGeneratingBg, setIsGeneratingBg] = useState(false);
+  const [isAiRelighting, setIsAiRelighting] = useState(false);
   const [feather, setFeather] = useState(0);
   const [shadow, setShadow] = useState(0);
 
@@ -174,16 +177,106 @@ const BackgroundRemover: React.FC = () => {
     setBatchItems(prev => prev.filter(item => item.id !== id));
   };
 
-  const downloadBatchResults = () => {
+  const downloadBatchResults = async () => {
     const completedItems = batchItems.filter(item => item.status === 'completed' && item.result);
     if (completedItems.length === 0) return;
-    
-    completedItems.forEach((item, index) => {
+
+    if (completedItems.length === 1) {
       const link = document.createElement('a');
-      link.href = `data:image/png;base64,${item.result}`;
-      link.download = `batch_result_${index}_${Date.now()}.png`;
+      link.href = `data:image/png;base64,${completedItems[0].result}`;
+      link.download = `removed_bg_01.png`;
       link.click();
-    });
+      return;
+    }
+
+    try {
+      toast.info(`Đang đóng gói ${completedItems.length} ảnh tách nền vào file ZIP...`);
+      await downloadAsZip(
+        completedItems.map((item, idx) => ({
+          filename: `yody_cutout_${String(idx + 1).padStart(2, '0')}.png`,
+          dataOrUrl: `data:image/png;base64,${item.result}`,
+        })),
+        `yody_cutouts_${Date.now()}.zip`
+      );
+      toast.success('Đã xuất file ZIP tách nền thành công!');
+    } catch {
+      toast.error('Lỗi khi đóng gói file ZIP.');
+    }
+  };
+
+  const handleAiRelight = async () => {
+    const subjectSrc = originalImage || transparentResult;
+    if (!subjectSrc || isAiRelighting) return;
+
+    const targetEnvPrompt =
+      bgType === 'prompt' && bgPrompt.trim()
+        ? bgPrompt.trim()
+        : bgType === 'color'
+        ? `Clean commercial fashion studio cyclorama background in color ${bgColor}, soft directional key light and natural floor shadow`
+        : 'Luxury commercial fashion studio with soft natural daylight and realistic contact floor shadow';
+
+    setIsAiRelighting(true);
+    try {
+      let bgImgB64: string | undefined = undefined;
+      if (bgType === 'image' && bgImage) {
+        if (bgImage.startsWith('data:')) {
+          bgImgB64 = bgImage.split(',')[1];
+        } else {
+          const res = await fetch(bgImage);
+          const blob = await res.blob();
+          bgImgB64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+
+      const canUseGemini = await hasRealGeminiCredentials();
+      let harmonizedB64: string | undefined;
+
+      if (canUseGemini) {
+        harmonizedB64 = await geminiService.relightSubjectWithBackground(
+          subjectSrc,
+          bgImgB64 || targetEnvPrompt,
+          Boolean(bgImgB64),
+          '3:4'
+        );
+      } else if (await isFlowBackendAvailable().catch(() => false)) {
+        const flowUrl = await generateImageViaFlow({
+          prompt: `Place the subject from the first image seamlessly into this environment: ${targetEnvPrompt}. Harmonize rim lighting on hair and clothing edges, match ambient color temperature, and cast a realistic soft contact shadow on the floor while keeping 100% identical face and outfit.`,
+          aspectRatio: '3:4',
+          model: FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_1,
+          modelImageBase64: subjectSrc,
+          referenceImagesBase64: bgImgB64 ? [bgImgB64] : undefined,
+        });
+        if (flowUrl) {
+          harmonizedB64 = flowUrl.startsWith('data:') ? flowUrl.split(',')[1] : flowUrl;
+        }
+      } else {
+        window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'google' } }));
+        toast.info('Vui lòng kết nối Google Flow hoặc nhập Gemini API Key để dùng Hòa trộn Ánh sáng AI.');
+        return;
+      }
+
+      if (harmonizedB64) {
+        if (harmonizedB64.startsWith('http') || harmonizedB64.startsWith('/')) {
+          const r = await fetch(harmonizedB64);
+          const b = await r.blob();
+          harmonizedB64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
+            reader.readAsDataURL(b);
+          });
+        }
+        setFinalResult(harmonizedB64);
+        toast.success('Đã hòa trộn ánh sáng viền & bóng đổ chân thực bằng Nano Banana 2.1!');
+      }
+    } catch (err: any) {
+      toast.error('Lỗi khi hòa trộn ánh sáng AI', { description: err?.message });
+    } finally {
+      setIsAiRelighting(false);
+    }
   };
 
   const handleBgImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -729,7 +822,20 @@ const BackgroundRemover: React.FC = () => {
                             </div>
                         </div>
 
+                        {bgType !== 'transparent' && (
+                            <button
+                                type="button"
+                                onClick={handleAiRelight}
+                                disabled={isAiRelighting}
+                                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-pink-600 hover:brightness-110 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-pink-500/20 disabled:opacity-50"
+                            >
+                                {isAiRelighting ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                                {isAiRelighting ? 'Đang khớp nắng & bóng đổ AI...' : '✨ Hòa trộn Ánh sáng & Bóng đổ AI (2.1)'}
+                            </button>
+                        )}
+
                         <button 
+                            type="button"
                             onClick={() => setIsRefining(true)}
                             className="w-full py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border border-white/10 group"
                         >

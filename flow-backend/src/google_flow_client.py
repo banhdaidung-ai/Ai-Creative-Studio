@@ -406,16 +406,20 @@ async def configure_flow_settings(
     page: Page,
     mode: str,
     aspect_ratio: str,
-    duration: int = 5,
-    model_name: str = "google-flow-nano-banana-pro"
+    duration: int = 8,
+    model_name: str = "google-flow-nano-banana-pro",
+    thinking_level: str = "medium",
+    num_outputs: int = 1,
+    video_submode: str = "standard",
+    resolution: str = "720p",
 ):
     """
-    Cấu hình mode (Ảnh / Video), Model trên Google Flow (Nano Banana Pro / 2 / 2 Lite hoặc Veo 3.1 / Omni Flash),
-    Tỷ lệ khung hình và Thời lượng.
+    Cấu hình mode (Ảnh / Video), Model trên Google Flow (Nano Banana Pro / 2.1 / 2 Lite hoặc Omni 1.2 Flash / Veo 3.1 Lite),
+    Tỷ lệ khung hình, Mức suy luận, Độ phân giải, Chế độ Khung hình/Thành phần và Số lượng xuất.
     """
     try:
         settings_btn = await page.wait_for_selector(
-            '[aria-label="Điều kiện kích hoạt cài đặt"], button:has-text("Nano Banana"), button:has-text("Video ·"), button:has-text("Omni")',
+            '[aria-label="Điều kiện kích hoạt cài đặt"], button:has-text("Nano Banana"), button:has-text("Video ·"), button:has-text("Omni"), button:has-text("Veo")',
             timeout=8000
         )
         if not settings_btn:
@@ -427,31 +431,31 @@ async def configure_flow_settings(
 
         # 1. Chọn Mode (Hình ảnh vs Video)
         if mode == "image":
-            img_mode_btn = await page.query_selector('button:has-text("Hình ảnh"), button:has-text("image")')
+            img_mode_btn = await page.query_selector('button:has-text("Hình ảnh"), button:has-text("Image")')
             if img_mode_btn:
                 await img_mode_btn.click()
                 await asyncio.sleep(0.4)
 
-            # Chọn model Image trên Google Flow
+            # Chọn model Image trên Google Flow (Nano Banana Pro / 2.1 / 2 Lite)
             model_dd = await page.query_selector('[aria-label="Chọn nhóm mô hình"]')
             if model_dd:
                 await model_dd.click()
                 await asyncio.sleep(0.4)
-                
+
                 target_model_text = "Nano Banana Pro"
                 m_lower = (model_name or "").lower()
                 if "lite" in m_lower:
                     target_model_text = "Nano Banana 2 Lite"
-                elif "nano-banana-2" in m_lower and "pro" not in m_lower:
-                    target_model_text = "Nano Banana 2"
+                elif ("2.1" in m_lower or "nano-banana-2" in m_lower) and "pro" not in m_lower:
+                    target_model_text = "Nano Banana 2.1"
                 elif "pro" in m_lower:
                     target_model_text = "Nano Banana Pro"
 
                 model_opt = (
                     await page.query_selector(f'[role="menuitem"]:has-text("{target_model_text}")')
                     or await page.query_selector(f'text="{target_model_text}"')
+                    or await page.query_selector('text="Nano Banana 2.1"')
                     or await page.query_selector('text="Nano Banana Pro"')
-                    or await page.query_selector('text="Nano Banana 2"')
                 )
                 if model_opt:
                     await model_opt.click()
@@ -459,34 +463,62 @@ async def configure_flow_settings(
                     await asyncio.sleep(0.3)
                 else:
                     await page.keyboard.press("Escape")
+
+            # Mức chất lượng / suy luận trên Nano Banana 2.1 (Thấp / Trung bình / Cao)
+            lvl_map = {
+                "low": ('button:has-text("Thấp"), button:has-text("Low")'),
+                "medium": ('button:has-text("Trung bình"), button:has-text("Medium")'),
+                "high": ('button:has-text("Cao"), button:has-text("High")'),
+            }
+            lvl_sel = lvl_map.get((thinking_level or "medium").lower())
+            if lvl_sel:
+                lvl_btn = await page.query_selector(lvl_sel)
+                if lvl_btn:
+                    await lvl_btn.click()
+                    await asyncio.sleep(0.2)
+
+            # Số lượng ảnh đầu ra x1..x4
+            clamped_count = max(1, min(4, int(num_outputs or 1)))
+            cnt_btn = await page.query_selector(f'.cdk-overlay-pane button:has-text("x{clamped_count}")')
+            if cnt_btn:
+                await cnt_btn.click()
+                await asyncio.sleep(0.2)
         else:  # video mode
             vid_mode_btn = await page.query_selector('button:has-text("Video"), button:has-text("videocam")')
             if vid_mode_btn:
                 await vid_mode_btn.click()
                 await asyncio.sleep(0.4)
 
-            # Chọn model Video trên Google Flow: Veo 3.1 (Quality / Fast / Lite) hoặc Omni 1.1 Flash
+            # Chọn chế độ phụ Video: Khung hình (Frames) vs Thành phần (Ingredients)
+            if video_submode == "ingredients":
+                ing_btn = await page.query_selector('button:has-text("Thành phần"), button:has-text("Ingredients")')
+                if ing_btn:
+                    await ing_btn.click()
+                    await asyncio.sleep(0.3)
+            else:
+                frm_btn = await page.query_selector('button:has-text("Khung hình"), button:has-text("Frames")')
+                if frm_btn:
+                    await frm_btn.click()
+                    await asyncio.sleep(0.3)
+
+            # Chọn model Video thế hệ mới (Omni 1.2 Flash hoặc Veo 3.1 - Lite)
             model_dd = await page.query_selector('[aria-label="Chọn nhóm mô hình"]')
             if model_dd:
                 await model_dd.click()
                 await asyncio.sleep(0.4)
 
-                target_video_text = "Veo 3.1 - Quality"
                 vm_lower = (model_name or "").lower()
-                if "omni" in vm_lower:
-                    target_video_text = "Omni 1.1 Flash"
-                elif "fast" in vm_lower:
-                    target_video_text = "Veo 3.1 - Fast"
-                elif "lite" in vm_lower:
+                if "lite" in vm_lower:
                     target_video_text = "Veo 3.1 - Lite"
-                elif "quality" in vm_lower:
-                    target_video_text = "Veo 3.1 - Quality"
+                else:
+                    # Mặc định dùng Omni 1.2 Flash (thay thế Omni 1.1 / Veo 3.1 Quality / Fast ngừng hoạt động 05/12)
+                    target_video_text = "Omni 1.2 Flash"
 
                 veo_opt = (
                     await page.query_selector(f'[role="menuitem"]:has-text("{target_video_text}")')
                     or await page.query_selector(f'text="{target_video_text}"')
-                    or await page.query_selector('text="Veo 3.1 - Quality"')
-                    or await page.query_selector('text="Veo 3.1 - Fast"')
+                    or await page.query_selector('[role="menuitem"]:has-text("Omni 1.2 Flash")')
+                    or await page.query_selector('[role="menuitem"]:has-text("Veo 3.1 - Lite")')
                 )
                 if veo_opt:
                     await veo_opt.click()
@@ -495,16 +527,23 @@ async def configure_flow_settings(
                 else:
                     await page.keyboard.press("Escape")
 
-            # Độ phân giải 720p cho video nếu có
-            res_btn = await page.query_selector('button:has-text("720p")')
+            # Độ phân giải (360p / 720p)
+            target_res = "360p" if resolution == "360p" else "720p"
+            res_btn = await page.query_selector(f'.cdk-overlay-pane button:has-text("{target_res}"), button:has-text("{target_res}")')
             if res_btn:
                 await res_btn.click()
                 await asyncio.sleep(0.2)
 
-            # Duration cho video (4, 6, 8, 10 giây)
-            dur_btn = await page.query_selector(f'button:has-text("{duration} giây")')
+            # Duration cho video nếu có nút trên panel
+            dur_btn = await page.query_selector(f'button:has-text("{duration} giây"), button:has-text("{duration}s")')
             if dur_btn:
                 await dur_btn.click()
+                await asyncio.sleep(0.2)
+
+            # Chọn x1 để tiết kiệm quota Flow PRO và tăng tốc độ render
+            x1_btn = await page.query_selector('.cdk-overlay-pane button:has-text("x1")')
+            if x1_btn:
+                await x1_btn.click()
                 await asyncio.sleep(0.2)
 
         # 2. Aspect Ratio: Map thông minh sang 1 trong 5 tỉ lệ Flow hỗ trợ (16:9, 1:1, 9:16, 4:3, 3:4)
@@ -666,6 +705,68 @@ async def _upload_single_reference_image(page: Page, reference_image_path: str) 
 
     except Exception as e:
         logger.warning(f"Lỗi khi tải ảnh tham chiếu: {e}")
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return ref_urls
+
+
+async def _upload_frame_chip_image(page: Page, chip_selector: str, image_path: str) -> set[str]:
+    """
+    Tải ảnh vào chip Khung hình Bắt đầu ('Bắt đầu' / 'Start') hoặc Kết thúc ('Kết thúc' / 'End')
+    trong chế độ Video Khung hình của Google Flow.
+    """
+    ref_urls: set[str] = set()
+    if not image_path or not Path(image_path).exists():
+        return ref_urls
+
+    try:
+        urls_before = await _get_all_media_urls(page)
+        chip_btn = await page.query_selector(chip_selector)
+        if not chip_btn:
+            logger.warning(f"Không tìm thấy chip khung hình ({chip_selector}), chuyển sang tải thành phần chuẩn.")
+            return await _upload_single_reference_image(page, image_path)
+
+        await chip_btn.click(force=True)
+        await asyncio.sleep(0.8)
+
+        upload_btn = await page.wait_for_selector(
+            'button.sidebar-upload-btn, button:has-text("Tải nội dung nghe nhìn lên"), [role="button"]:has-text("Tải"), button:has-text("Upload")',
+            timeout=8000,
+        )
+        if not upload_btn:
+            await page.keyboard.press("Escape")
+            return ref_urls
+
+        async with page.expect_file_chooser(timeout=8000) as fc_info:
+            await upload_btn.click(force=True)
+        file_chooser = await fc_info.value
+        await file_chooser.set_files(image_path)
+
+        confirm_btn = await page.wait_for_selector(
+            'button:has-text("Thêm vào câu lệnh"):not([disabled]):not(.mat-mdc-button-disabled), '
+            'button:has-text("Sử dụng"):not([disabled]), '
+            'button:has-text("Đặt làm"):not([disabled]), '
+            '.detail-add-to-prompt-btn:not([disabled]):not(.mat-mdc-button-disabled)',
+            timeout=35000,
+        )
+        if confirm_btn:
+            await confirm_btn.click()
+            await asyncio.sleep(1.2)
+
+        urls_after = await _get_all_media_urls(page)
+        ref_urls.update(urls_after - urls_before)
+        try:
+            backdrop = await page.query_selector('.cdk-overlay-backdrop')
+            if backdrop:
+                await page.keyboard.press("Escape")
+                await asyncio.sleep(0.3)
+        except Exception:
+            pass
+        return ref_urls
+    except Exception as e:
+        logger.warning(f"Lỗi khi gắn ảnh vào chip khung hình ({chip_selector}): {e}")
         try:
             await page.keyboard.press("Escape")
         except Exception:
@@ -861,9 +962,10 @@ async def generate_image_on_flow(
     progress_callback=None,
     model_image_path: Optional[str] = None,
     reference_image_paths: Optional[list[str]] = None,
+    thinking_level: str = "medium",
 ) -> list[dict]:
     """
-    Tạo ảnh trên Google Flow sử dụng các model Nano Banana Pro / 2 / 2 Lite.
+    Tạo ảnh trên Google Flow sử dụng các model Nano Banana Pro / 2.1 / 2 Lite.
     Hỗ trợ đa ảnh tham chiếu: Ảnh người mẫu (model_image_path) + Các ảnh bối cảnh/trang phục (reference_image_paths).
     """
     async with _get_flow_lock():
@@ -877,6 +979,7 @@ async def generate_image_on_flow(
             progress_callback=progress_callback,
             model_image_path=model_image_path,
             reference_image_paths=reference_image_paths,
+            thinking_level=thinking_level,
         )
 
 
@@ -890,6 +993,7 @@ async def _generate_image_on_flow_locked(
     progress_callback=None,
     model_image_path: Optional[str] = None,
     reference_image_paths: Optional[list[str]] = None,
+    thinking_level: str = "medium",
 ) -> list[dict]:
     context = await get_browser_context()
     page = await context.new_page()
@@ -912,7 +1016,14 @@ async def _generate_image_on_flow_locked(
         if progress_callback:
             await progress_callback(job_id, 30, f"Đang cấu hình mô hình ({model}) và tỷ lệ ({aspect_ratio})...")
 
-        await configure_flow_settings(page, mode="image", aspect_ratio=aspect_ratio, model_name=model)
+        await configure_flow_settings(
+            page,
+            mode="image",
+            aspect_ratio=aspect_ratio,
+            model_name=model,
+            thinking_level=thinking_level,
+            num_outputs=num_images,
+        )
 
         # Xây dựng danh sách ảnh tham chiếu có thứ tự: Ảnh người mẫu đầu tiên, tiếp theo là ảnh bối cảnh
         ordered_paths: list[str] = []
@@ -1249,16 +1360,19 @@ async def _wait_for_new_images(
 async def generate_video_on_flow(
     prompt: str,
     aspect_ratio: str = "16:9",
-    duration: int = 5,
+    duration: int = 8,
     reference_image_path: Optional[str] = None,
     job_id: str = "",
-    model: str = "google-flow-veo-quality",
+    model: str = "google-flow-omni-1.2-flash",
     progress_callback=None,
+    video_mode: str = "standard",
+    resolution: str = "720p",
+    end_frame_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
 ) -> Optional[str]:
     """
-    Tạo video trên Google Flow với mô hình Veo 3.1 (Quality / Fast / Lite) hoặc Omni 1.1 Flash.
-    Hỗ trợ text-to-video và image-to-video.
-    Trả về URL video (data URI hoặc http://.../media/...).
+    Tạo video trên Google Flow với mô hình Omni 1.2 Flash (mặc định mới, kèm âm thanh) hoặc Veo 3.1 Lite.
+    Hỗ trợ Text-to-Video, Single-Frame, Start+End Keyframes (Khung hình) và Multi-Image Ingredients (Thành phần).
     """
     async with _get_flow_lock():
         return await _generate_video_on_flow_locked(
@@ -1269,17 +1383,25 @@ async def generate_video_on_flow(
             job_id=job_id,
             model=model,
             progress_callback=progress_callback,
+            video_mode=video_mode,
+            resolution=resolution,
+            end_frame_path=end_frame_path,
+            reference_image_paths=reference_image_paths,
         )
 
 
 async def _generate_video_on_flow_locked(
     prompt: str,
     aspect_ratio: str = "16:9",
-    duration: int = 5,
+    duration: int = 8,
     reference_image_path: Optional[str] = None,
     job_id: str = "",
-    model: str = "google-flow-veo-quality",
+    model: str = "google-flow-omni-1.2-flash",
     progress_callback=None,
+    video_mode: str = "standard",
+    resolution: str = "720p",
+    end_frame_path: Optional[str] = None,
+    reference_image_paths: Optional[list[str]] = None,
 ) -> Optional[str]:
     context = await get_browser_context()
     page = await context.new_page()
@@ -1299,13 +1421,64 @@ async def _generate_video_on_flow_locked(
 
         await ensure_in_project(page)
 
-        if progress_callback:
-            await progress_callback(job_id, 30, f"Đang cấu hình mô hình video ({model})...")
-
-        await configure_flow_settings(page, mode="video", aspect_ratio=aspect_ratio, duration=duration, model_name=model)
+        effective_submode = "ingredients" if (video_mode == "ingredients" or (reference_image_paths and len(reference_image_paths) > 1)) else "standard"
 
         if progress_callback:
-            await progress_callback(job_id, 40, "Đang nhập prompt video...")
+            await progress_callback(job_id, 30, f"Đang cấu hình mô hình video ({model} · {resolution})...")
+
+        await configure_flow_settings(
+            page,
+            mode="video",
+            aspect_ratio=aspect_ratio,
+            duration=duration,
+            model_name=model,
+            video_submode=effective_submode,
+            resolution=resolution,
+        )
+
+        # Upload khung hình / thành phần trước hoặc sau prompt
+        ref_urls: set[str] = set()
+        if video_mode == "interpolation" and (reference_image_path or end_frame_path):
+            if reference_image_path and Path(reference_image_path).exists():
+                if progress_callback:
+                    await progress_callback(job_id, 38, "Đang gắn Khung hình Bắt đầu lên Google Flow...")
+                u1 = await _upload_frame_chip_image(
+                    page,
+                    '.empty-chip:has-text("Bắt đầu"), button:has-text("Bắt đầu"), .empty-chip:has-text("Start")',
+                    reference_image_path,
+                )
+                ref_urls.update(u1)
+                await asyncio.sleep(0.8)
+            if end_frame_path and Path(end_frame_path).exists():
+                if progress_callback:
+                    await progress_callback(job_id, 44, "Đang gắn Khung hình Kết thúc lên Google Flow...")
+                u2 = await _upload_frame_chip_image(
+                    page,
+                    '.empty-chip:has-text("Kết thúc"), button:has-text("Kết thúc"), .empty-chip:has-text("End")',
+                    end_frame_path,
+                )
+                ref_urls.update(u2)
+                await asyncio.sleep(0.8)
+        elif effective_submode == "ingredients" and reference_image_paths:
+            valid_ing = [p for p in reference_image_paths if p and Path(p).exists()][:6]
+            if valid_ing:
+                if progress_callback:
+                    await progress_callback(job_id, 42, f"Đang tải {len(valid_ing)} ảnh Thành phần lên Google Flow...")
+                ref_urls = await _upload_reference_images(page, valid_ing)
+                await asyncio.sleep(1.0)
+        elif reference_image_path and Path(reference_image_path).exists():
+            if progress_callback:
+                await progress_callback(job_id, 42, "Đang gắn ảnh mở đầu lên Google Flow...")
+            u_single = await _upload_frame_chip_image(
+                page,
+                '.empty-chip:has-text("Bắt đầu"), button:has-text("Bắt đầu"), .empty-chip:has-text("Start")',
+                reference_image_path,
+            )
+            ref_urls.update(u_single)
+            await asyncio.sleep(1.0)
+
+        if progress_callback:
+            await progress_callback(job_id, 48, "Đang nhập prompt chuyển động video...")
 
         prompt_input = await page.wait_for_selector(
             '[contenteditable="true"], textarea, [role="textbox"]',
@@ -1315,18 +1488,8 @@ async def _generate_video_on_flow_locked(
             raise RuntimeError("Không tìm thấy ô nhập câu lệnh trên Google Flow.")
 
         await prompt_input.click()
-        await page.keyboard.press("Meta+A")
-        await page.keyboard.press("Backspace")
         await prompt_input.fill(prompt)
         await asyncio.sleep(0.5)
-
-        # Upload ảnh tham chiếu cho image-to-video
-        ref_urls: set[str] = set()
-        if reference_image_path and Path(reference_image_path).exists():
-            if progress_callback:
-                await progress_callback(job_id, 45, "Đang tải ảnh tham chiếu lên Google Flow...")
-            ref_urls = await _upload_single_reference_image(page, reference_image_path)
-            await asyncio.sleep(1.2)
 
         # Dọn sạch bất kỳ backdrop/overlay nào có thể che chắn pointer events
         try:
@@ -1484,16 +1647,25 @@ async def enhance_prompt_simple(prompt: str, mode: str) -> str:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={google_ai_key}",
+                    "https://generativelanguage.googleapis.com/v1/interactions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": google_ai_key,
+                        "Api-Revision": "2026-05-20",
+                    },
                     json={
-                        "system_instruction": {"parts": [{"text": system}]},
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 400, "temperature": 0.7},
+                        "model": "gemini-4-hydrogen",
+                        "system_instruction": system,
+                        "input": prompt,
+                        "generation_config": {"thinking_level": "low"},
                     },
                 )
                 data = resp.json()
-                enhanced = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return enhanced
+                for step in data.get("steps", []):
+                    if step.get("type") == "model_output":
+                        for block in step.get("content", []):
+                            if block.get("type") == "text" and block.get("text"):
+                                return block["text"].strip()
         except Exception:
             pass
 

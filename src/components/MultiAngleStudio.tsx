@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
-import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS, hasRealGeminiCredentials } from '../services/gemini';
+import { geminiService, ANGLE_CONFIGS, MODEL_OPTIONS, hasRealGeminiCredentials, normalizeClientModelId } from '../services/gemini';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, formatImageSrc } from '../utils/image';
+import { downloadAsZip, sanitizeSkuName } from '../utils/zipExport';
 import { generateImageViaFlow, isFlowBackendAvailable, isFlowModel, FLOW_MODEL_IDS, FLOW_TO_GEMINI_MAP, buildFlowUnavailableMessage } from '../services/flowService';
 import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { useProject } from '../contexts/ProjectContext';
@@ -13,7 +14,7 @@ import {
   Lightbulb, Loader2, Maximize2, X, Layers, Zap,
   Square, Image as ImageIcon, CheckSquare, Check,
   LayoutGrid, Film, User, Shirt,
-  Settings2, ChevronUp, ChevronDown, Sliders, Play, Box
+  Settings2, ChevronUp, ChevronDown, Sliders, Play, Box, ShieldCheck
 } from 'lucide-react';
 
 const PhotoEditor = lazy(() => import('./PhotoEditor'));
@@ -49,6 +50,9 @@ const MultiAngleStudio: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'reel' | 'grid'>('grid');
   const [showConfig, setShowConfig] = useState(true);
+  const [skuPrefix, setSkuPrefix] = useState<string>('YODY_LOOKBOOK');
+  const [qcScores, setQcScores] = useState<Record<string, number>>({});
+  const [isRunningQc, setIsRunningQc] = useState<boolean>(false);
 
   const [prompts, setPrompts] = useState<Record<string, string>>(() => {
     const initialPrompts: Record<string, string> = {};
@@ -59,7 +63,7 @@ const MultiAngleStudio: React.FC = () => {
   });
 
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+    return normalizeClientModelId(localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
   });
   const [imageSize, setImageSize] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('3:4');
@@ -303,7 +307,7 @@ const MultiAngleStudio: React.FC = () => {
             } catch (flowErr: any) {
                 const canFallbackGemini = await hasRealGeminiCredentials();
                 if (canFallbackGemini) {
-                    const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+                    const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-nano-banana-2.1';
                     toast.info(`Google Flow chưa phản hồi, tự động dùng ${fallbackModel} để hoàn tất góc chụp...`);
                     result = await geminiService.generateSingleAngle(
                         modelImage, 
@@ -398,18 +402,54 @@ const MultiAngleStudio: React.FC = () => {
     });
   };
 
-  const handleBulkDownload = () => {
-      Array.from(selectedAngles).forEach((id, index) => {
-          const base64 = results[id];
-          if (base64) {
-              setTimeout(() => {
-                  const link = document.createElement('a');
-                  link.href = `data:image/png;base64,${base64}`;
-                  link.download = `yody-${id}-${Date.now()}.png`;
-                  link.click();
-              }, index * 400);
+  const handleBulkDownload = async () => {
+      const selectedIds = Array.from(selectedAngles).filter(id => results[id]);
+      if (selectedIds.length === 0) return;
+      const cleanSku = sanitizeSkuName(skuPrefix, 'YODY_LOOKBOOK');
+      if (selectedIds.length === 1) {
+          const id = selectedIds[0];
+          const link = document.createElement('a');
+          link.href = formatImageSrc(results[id]);
+          link.download = `${cleanSku}_${id}.png`;
+          link.click();
+          return;
+      }
+      try {
+          toast.info(`Đang đóng gói ${selectedIds.length} góc chụp vào file ZIP (${cleanSku})...`);
+          await downloadAsZip(
+              selectedIds.map((id) => ({
+                  filename: `${cleanSku}_${id}.png`,
+                  dataOrUrl: formatImageSrc(results[id]),
+              })),
+              `${cleanSku}_Angles_${Date.now()}.zip`
+          );
+          toast.success('Đã xuất file ZIP bộ góc chụp thành công!');
+      } catch {
+          toast.error('Không thể đóng gói file ZIP.');
+      }
+  };
+
+  const handleRunAnglesQc = async () => {
+      const ids = Object.keys(results);
+      if (ids.length === 0 || isRunningQc) return;
+      const canQc = await hasRealGeminiCredentials();
+      if (!canQc) {
+          window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'google' } }));
+          toast.info('Cần Gemini API Key để chấm điểm QC tự động (Decision 1).');
+          return;
+      }
+      setIsRunningQc(true);
+      try {
+          for (const id of ids) {
+              const rev = await geminiService.reviewImage(results[id]);
+              setQcScores(prev => ({ ...prev, [id]: rev.score ?? (rev.pass ? 92 : 42) }));
           }
-      });
+          toast.success('Đã chấm điểm AI Auto-QC cho toàn bộ góc chụp!');
+      } catch {
+          toast.error('Lỗi khi chấm điểm QC.');
+      } finally {
+          setIsRunningQc(false);
+      }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -657,15 +697,38 @@ const MultiAngleStudio: React.FC = () => {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden order-1 lg:order-2">
-            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
-                <div className="flex items-center gap-4">
+            <div className="mb-2 md:mb-3 flex flex-wrap gap-2 items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
+                <div className="flex items-center gap-3">
                     <span className="text-[9px] md:text-[10px] font-black uppercase text-slate-900 dark:text-white tracking-widest">Góc Máy ({Object.keys(results).length})</span>
-                    {Object.keys(results).length > 0 && <button onClick={toggleSelectAll} className="flex items-center gap-2 px-2 py-1 md:px-3 md:py-1.5 rounded-xl hover:bg-white/10 text-[8px] md:text-[9px] font-black uppercase text-slate-400 transition-all border border-transparent hover:border-white/10">{selectedAngles.size === Object.keys(results).length ? <CheckSquare className="w-3 h-3 text-yellow-400" /> : <Square className="w-3 h-3" />} <span className="hidden md:inline">Select All</span></button>}
+                    {Object.keys(results).length > 0 && (
+                      <>
+                        <button type="button" onClick={toggleSelectAll} className="flex items-center gap-1.5 px-2 py-1 rounded-xl hover:bg-white/10 text-[8px] md:text-[9px] font-black uppercase text-slate-400 transition-all border border-transparent hover:border-white/10">
+                          {selectedAngles.size === Object.keys(results).length ? <CheckSquare className="w-3 h-3 text-yellow-400" /> : <Square className="w-3 h-3" />} <span className="hidden md:inline">Chọn hết</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRunAnglesQc}
+                          disabled={isRunningQc}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-[8px] md:text-[9px] font-black uppercase border border-emerald-500/20"
+                        >
+                          {isRunningQc ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                          <span>Chấm QC AI</span>
+                        </button>
+                      </>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
-                    <button onClick={() => setViewMode('reel')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'reel' ? 'bg-white/20 text-yellow-400' : 'text-slate-500 hover:text-slate-300'}`}><Film className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white/20 text-yellow-400' : 'text-slate-500 hover:text-slate-300'}`}><LayoutGrid className="w-3.5 h-3.5" /></button>
-                    <button onClick={handleBulkDownload} disabled={selectedAngles.size === 0} className="px-3 py-1.5 md:px-5 md:py-2 rounded-xl font-black text-[8px] md:text-[9px] uppercase flex items-center gap-2 transition-all shadow-xl bg-blue-600 text-white hover:bg-blue-500"><DownloadCloud className="w-3.5 h-3.5" /> <span className="hidden md:inline">Download ({selectedAngles.size})</span></button>
+                    <input
+                      type="text"
+                      value={skuPrefix}
+                      onChange={(e) => setSkuPrefix(e.target.value)}
+                      placeholder="Mã SKU..."
+                      aria-label="Mã SKU bộ ảnh đa góc"
+                      className="w-24 md:w-28 px-2.5 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[9px] font-mono font-bold text-slate-700 dark:text-slate-200 outline-none"
+                    />
+                    <button type="button" onClick={() => setViewMode('reel')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'reel' ? 'bg-white/20 text-yellow-400' : 'text-slate-500 hover:text-slate-300'}`}><Film className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={() => setViewMode('grid')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white/20 text-yellow-400' : 'text-slate-500 hover:text-slate-300'}`}><LayoutGrid className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={handleBulkDownload} disabled={selectedAngles.size === 0} className="px-3 py-1.5 md:px-4 md:py-2 rounded-xl font-black text-[8px] md:text-[9px] uppercase flex items-center gap-1.5 transition-all shadow-xl bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40"><DownloadCloud className="w-3.5 h-3.5" /> <span>Xuất ZIP ({selectedAngles.size})</span></button>
                 </div>
             </div>
 
@@ -679,7 +742,20 @@ const MultiAngleStudio: React.FC = () => {
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20"><Loader2 className="w-8 h-8 text-yellow-400 animate-spin mb-2" /><span className="text-[8px] font-bold text-yellow-400/60 uppercase tracking-widest">Rendering...</span></div>
                                     ) : results[config.id] ? (
                                         <>
-                                            <img src={formatImageSrc(results[config.id])} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                                            <img src={formatImageSrc(results[config.id])} loading="lazy" decoding="async" className="w-full h-full object-cover" alt={config.name} />
+                                            {typeof qcScores[config.id] === 'number' && (
+                                              <div
+                                                className={`absolute top-2 right-2 z-10 px-2 py-0.5 rounded-full text-[8px] font-black uppercase backdrop-blur-md border shadow ${
+                                                  qcScores[config.id] >= 80
+                                                    ? 'bg-emerald-500/85 text-white border-emerald-300/40'
+                                                    : qcScores[config.id] >= 65
+                                                    ? 'bg-amber-500/85 text-black border-amber-300/40'
+                                                    : 'bg-red-600/90 text-white border-red-300/40'
+                                                }`}
+                                              >
+                                                QC {qcScores[config.id]}%
+                                              </div>
+                                            )}
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-1.5 md:gap-2">
                                                     <button onClick={() => setPreviewImage(results[config.id])} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10" title="Phóng to"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>

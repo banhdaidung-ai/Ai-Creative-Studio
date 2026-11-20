@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MODEL_OPTIONS } from '../services/gemini';
+import { MODEL_OPTIONS, normalizeClientModelId } from '../services/gemini';
 import { FLOW_MODEL_IDS, isFlowModel, isFlowBackendAvailable } from '../services/flowService';
 import { MUSE_MODEL_OPTIONS, isMuseModel, getMuseReadyStatus, fetchMuseAdminUrl, getMuseAdminUrl } from '../services/museService';
 import { Sparkles, Zap, Image as ImageIcon, Palette, ChevronDown, Video, Globe, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Google Flow model definitions
+// Google Flow model definitions (Đồng bộ trực tiếp với flow.google.com tháng 11/2026)
 const FLOW_MODEL_OPTIONS = [
   // Image Models
   {
@@ -16,9 +16,9 @@ const FLOW_MODEL_OPTIONS = [
     type: 'image' as const,
   },
   {
-    id: FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2,
-    name: '🍌 Nano Banana 2 (Flow)',
-    desc: 'Cân bằng tốc độ và chất lượng tạo ảnh.',
+    id: FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_1,
+    name: '🍌 Nano Banana 2.1 (Flow)',
+    desc: 'Mới nhất — cân bằng tốc độ & chất lượng, hỗ trợ suy luận Cao.',
     tier: 'flow' as const,
     type: 'image' as const,
   },
@@ -29,32 +29,18 @@ const FLOW_MODEL_OPTIONS = [
     tier: 'flow' as const,
     type: 'image' as const,
   },
-  // Video Models
+  // Video Models (Omni 1.2 Flash & Veo 3.1 Lite — Thế hệ mới thay thế bản ngừng ngày 05/12)
   {
-    id: FLOW_MODEL_IDS.VIDEO_VEO_QUALITY,
-    name: '🎬 Veo 3.1 Quality (Flow)',
-    desc: 'Chất lượng video điện ảnh 720p cao cấp nhất.',
-    tier: 'flow' as const,
-    type: 'video' as const,
-  },
-  {
-    id: FLOW_MODEL_IDS.VIDEO_VEO_FAST,
-    name: '⚡ Veo 3.1 Fast (Flow)',
-    desc: 'Tạo video tốc độ cao, chuyển động tự nhiên.',
+    id: FLOW_MODEL_IDS.VIDEO_OMNI_1_2_FLASH,
+    name: '🔊 Omni 1.2 Flash (Flow)',
+    desc: 'Mới nhất — video điện ảnh kèm âm thanh đồng bộ, hỗ trợ Khung hình & Thành phần.',
     tier: 'flow' as const,
     type: 'video' as const,
   },
   {
     id: FLOW_MODEL_IDS.VIDEO_VEO_LITE,
     name: '🎈 Veo 3.1 Lite (Flow)',
-    desc: 'Mô hình video rút gọn, render nhanh.',
-    tier: 'flow' as const,
-    type: 'video' as const,
-  },
-  {
-    id: FLOW_MODEL_IDS.VIDEO_OMNI_FLASH,
-    name: '🔊 Omni 1.1 Flash (Flow)',
-    desc: 'Mô hình video thế hệ mới có tích hợp âm thanh sống động.',
+    desc: 'Mô hình video ổn định, render nhanh trên Google Flow.',
     tier: 'flow' as const,
     type: 'video' as const,
   },
@@ -87,9 +73,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     ? MUSE_MODEL_OPTIONS
     : MUSE_MODEL_OPTIONS.filter(m => m.type === filterType);
 
-  const selectedGeminiModel = MODEL_OPTIONS.find(m => m.id === selectedModelId);
-  const selectedFlowModel = FLOW_MODEL_OPTIONS.find(m => m.id === selectedModelId);
-  const selectedMuseModel = MUSE_MODEL_OPTIONS.find(m => m.id === selectedModelId);
+  const normalizedSelectedId = normalizeClientModelId(selectedModelId);
+  const geminiApiModels = MODEL_OPTIONS.filter(m => !isFlowModel(m.id));
+  const selectedGeminiModel = geminiApiModels.find(m => m.id === normalizedSelectedId);
+  const selectedFlowModel = FLOW_MODEL_OPTIONS.find(m => m.id === normalizedSelectedId);
+  const selectedMuseModel = MUSE_MODEL_OPTIONS.find(m => m.id === normalizedSelectedId);
   const selectedModel = selectedGeminiModel || selectedFlowModel || selectedMuseModel || FLOW_MODEL_OPTIONS[0];
   const isFlowSelected = !!selectedFlowModel;
   const isMuseSelected = !!selectedMuseModel;
@@ -282,38 +270,38 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <thead>
                         <tr className="border-b border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300">
                           <th className="font-semibold p-2 w-1/3">Tiêu chí</th>
-                          <th className="font-semibold p-2 w-1/3 border-l border-slate-200 dark:border-white/10">Nano Banana 2</th>
+                          <th className="font-semibold p-2 w-1/3 border-l border-slate-200 dark:border-white/10 text-blue-600 dark:text-blue-400">Nano Banana 2.1</th>
                           <th className="font-semibold p-2 w-1/3 border-l border-slate-200 dark:border-white/10 text-purple-600 dark:text-purple-400">Nano Banana Pro</th>
                         </tr>
                       </thead>
                       <tbody>
                         <tr className="border-b border-slate-200 dark:border-white/5 text-slate-500 dark:text-slate-400">
-                          <td className="p-2 font-medium border-r border-slate-200 dark:border-white/5">Tốc độ</td>
-                          <td className="p-2 text-emerald-500 font-semibold border-r border-slate-200 dark:border-white/5">Cực nhanh (1x)</td>
-                          <td className="p-2 text-amber-500">Trung bình (1.5x)</td>
+                          <td className="p-2 font-medium border-r border-slate-200 dark:border-white/5">Tốc độ & Đa ảnh</td>
+                          <td className="p-2 text-emerald-500 font-semibold border-r border-slate-200 dark:border-white/5">Nhanh (Tới 14 ảnh)</td>
+                          <td className="p-2 text-amber-500">Chuẩn Studio</td>
                         </tr>
                         <tr className="border-b border-slate-200 dark:border-white/5 text-slate-500 dark:text-slate-400">
                           <td className="p-2 font-medium border-r border-slate-200 dark:border-white/5">Độ chi tiết</td>
-                          <td className="p-2 border-r border-slate-200 dark:border-white/5">Khá tốt</td>
+                          <td className="p-2 text-emerald-500 font-semibold border-r border-slate-200 dark:border-white/5">Rất cao (1K–4K)</td>
                           <td className="p-2 text-emerald-500 font-semibold">Cực cao (tốt nhất)</td>
                         </tr>
                         <tr className="border-b border-slate-200 dark:border-white/5 text-slate-500 dark:text-slate-400">
                           <td className="p-2 font-medium border-r border-slate-200 dark:border-white/5">Suy luận Prompt</td>
-                          <td className="p-2 border-r border-slate-200 dark:border-white/5">Cơ bản</td>
+                          <td className="p-2 border-r border-slate-200 dark:border-white/5">Minimal – High</td>
                           <td className="p-2 text-emerald-500 font-semibold">Phức tạp</td>
                         </tr>
                         <tr className="text-slate-500 dark:text-slate-400">
                           <td className="p-2 font-medium border-r border-slate-200 dark:border-white/5">Khuyên dùng</td>
-                          <td className="p-2 border-r border-slate-200 dark:border-white/5 text-[9px] leading-tight">Chỉnh sửa nhanh, tạo hàng loạt</td>
-                          <td className="p-2 text-[9px] leading-tight max-w-[100px]">Prompt khó, cần chân thực cao</td>
+                          <td className="p-2 border-r border-slate-200 dark:border-white/5 text-[9px] leading-tight">Phối bộ nhiều sản phẩm, sửa ảnh</td>
+                          <td className="p-2 text-[9px] leading-tight max-w-[100px]">Lookbook cao cấp, chân thực cao</td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
 
                   <div className="p-1.5 max-h-[220px] overflow-y-auto custom-scrollbar pb-4">
-                    {MODEL_OPTIONS.map((model) => {
-                      const isSelected = selectedModelId === model.id;
+                    {geminiApiModels.map((model) => {
+                      const isSelected = normalizedSelectedId === model.id;
                       const Icon = getIcon(model.id);
 
                       return (
@@ -394,7 +382,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       </div>
                       <div className="space-y-1 mt-1">
                         {FLOW_MODEL_OPTIONS.filter(m => m.type === 'image').map((model) => {
-                          const isSelected = selectedModelId === model.id;
+                          const isSelected = normalizedSelectedId === model.id;
                           const Icon = getIcon(model.id);
 
                           return (
@@ -441,7 +429,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       </div>
                       <div className="space-y-1 mt-1">
                         {FLOW_MODEL_OPTIONS.filter(m => m.type === 'video').map((model) => {
-                          const isSelected = selectedModelId === model.id;
+                          const isSelected = normalizedSelectedId === model.id;
                           const Icon = getIcon(model.id);
 
                           return (

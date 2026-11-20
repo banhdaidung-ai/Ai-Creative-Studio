@@ -1,9 +1,10 @@
 
 import React, { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
-import { geminiService, hasRealGeminiCredentials } from '../services/gemini';
-import { generateImageViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP, isLanOrLocalHostname, buildFlowUnavailableMessage } from '../services/flowService';
+import { geminiService, hasRealGeminiCredentials, normalizeClientModelId } from '../services/gemini';
+import { generateImagesBatchViaFlow, isFlowModel, FLOW_MODEL_IDS, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP, isLanOrLocalHostname, buildFlowUnavailableMessage } from '../services/flowService';
 import { isMuseModel, generateImageViaMuse } from '../services/museService';
 import { resizeImage, smoothImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
+import { downloadAsZip } from '../utils/zipExport';
 import { saveState, loadState } from '../utils/storage';
 import { useProject } from '../contexts/ProjectContext';
 import { toast } from 'sonner';
@@ -54,8 +55,14 @@ const ImageEditor: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [visibleHistoryCount, setVisibleHistoryCount] = useState(20);
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO;
+    return normalizeClientModelId(localStorage.getItem('last_selected_model') || FLOW_MODEL_IDS.IMAGE_NANO_BANANA_PRO);
   });
+  const [thinkingLevel, setThinkingLevel] = useState<'low' | 'medium' | 'high'>('medium');
+  const [variantCount, setVariantCount] = useState<1 | 2 | 4>(1);
+  const [variantImages, setVariantImages] = useState<string[]>([]);
+  const [colorLockEnabled, setColorLockEnabled] = useState(false);
+  const [lockedHexColor, setLockedHexColor] = useState('#1e3a8a');
+  const [lockedFabricNote, setLockedFabricNote] = useState('');
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const usingFlow = isFlowModel(selectedModelId);
 
@@ -235,7 +242,13 @@ const ImageEditor: React.FC = () => {
             if (modelInputRef.current) modelInputRef.current.value = '';
         } else {
             const base64s = await Promise.all(fileArray.map(f => resizeImage(f, 1024, 'image/jpeg', 0.85)));
-            setRefImages(prev => [...prev, ...base64s]);
+            setRefImages(prev => {
+              const combined = [...prev, ...base64s];
+              if (combined.length > 14) {
+                toast.info('Nano Banana 2.1 hỗ trợ tối đa 14 ảnh tham chiếu cùng lúc.');
+              }
+              return combined.slice(0, 14);
+            });
             addBatchToLibrary(base64s);
             if (refInputRef.current) refInputRef.current.value = '';
         }
@@ -459,14 +472,18 @@ const ImageEditor: React.FC = () => {
             }
           }
 
-          const flowPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao dựa trên ảnh tham chiếu, ánh sáng studio nghệ thuật';
+          const colorLockSuffix = colorLockEnabled
+            ? ` STRICT COLOR & FABRIC LOCK: Preserve exact brand color HEX ${lockedHexColor}${lockedFabricNote.trim() ? ` and exact fabric texture (${lockedFabricNote.trim()})` : ''} without any hue shift.`
+            : '';
+          const flowPrompt = (prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao dựa trên ảnh tham chiếu, ánh sáng studio nghệ thuật') + colorLockSuffix;
 
-          const flowResult = await generateImageViaFlow(
+          const flowResults = await generateImagesBatchViaFlow(
             {
               prompt: flowPrompt,
               aspectRatio,
-              numImages: 1,
+              numImages: variantCount,
               model: effectiveModelId,
+              thinkingLevel,
               modelImageBase64: modelImage || undefined,
               modelImageMime: modelMime,
               referenceImagesBase64: refImages.length > 0 ? refImages : undefined,
@@ -478,13 +495,16 @@ const ImageEditor: React.FC = () => {
             }
           );
 
-          if (flowResult) {
+          if (flowResults.length > 0) {
             playSuccessSound();
-            setResultImage(flowResult);
-            addToHistory({
-              url: flowResult,
-              prompt: flowPrompt,
-              mode: 'IMAGE_EDITOR'
+            setVariantImages(flowResults);
+            setResultImage(flowResults[0]);
+            flowResults.forEach((url) => {
+              addToHistory({
+                url,
+                prompt: flowPrompt,
+                mode: 'IMAGE_EDITOR'
+              });
             });
             return;
           } else {
@@ -492,7 +512,7 @@ const ImageEditor: React.FC = () => {
           }
         } else {
           // Khi không kết nối được Flow Backend: chỉ fallback sang Gemini nếu thực sự có Gemini API Key / Vertex / Server Key
-          const fallbackModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-3.1-flash-image';
+          const fallbackModel = FLOW_TO_GEMINI_MAP[effectiveModelId] || 'gemini-nano-banana-2.1';
           const canFallbackGemini = await hasRealGeminiCredentials();
           if (canFallbackGemini) {
             toast.info(`⚡ Google Flow Backend chưa kết nối, đang tự động chuyển tiếp sang mô hình ${fallbackModel} để tạo ảnh...`);
@@ -506,33 +526,51 @@ const ImageEditor: React.FC = () => {
       }
 
       // ── Gemini API path ───────────────────────────────────────────────────
-      let resultBase64;
       const genConfig = { 
         modelId: effectiveModelId, 
         aspectRatio, 
         imageSize,
         negativePrompt,
         seed,
-        cfgScale
+        cfgScale,
+        thinkingLevel: thinkingLevel === 'low' ? ('minimal' as const) : thinkingLevel,
       };
 
       const finalRefs = [...refImages];
-      let finalPrompt = prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao';
+      const colorLockDirective = colorLockEnabled
+        ? `\n\nSTRICT BRAND COLOR & FABRIC LOCK: Enforce exact garment color matching HEX ${lockedHexColor}${lockedFabricNote.trim() ? ` and material weave "${lockedFabricNote.trim()}"` : ''}. Do not alter hue or saturation.`
+        : '';
+      let finalPrompt = (prompt.trim() || 'Tạo ảnh người mẫu thời trang chuyên nghiệp chất lượng cao') + colorLockDirective;
       if (maskImage) {
           finalRefs.push(maskImage);
           finalPrompt += `\n\nCRITICAL MASK INSTRUCTION: The final reference image provided is a black-and-white INPAINTING MASK. You MUST ONLY modify the areas indicated in WHITE on the mask. Preserve 100% of the original model image outside of the white mask area exactly.`;
       }
 
-      if (modelImage) resultBase64 = await geminiService.editImage(modelImage, finalPrompt, finalRefs, genConfig);
-      else resultBase64 = await geminiService.generateImage(finalPrompt, genConfig, finalRefs);
-      
-      if (resultBase64) {
+      const generatedBatch: string[] = [];
+      for (let v = 0; v < variantCount; v++) {
+        if (variantCount > 1) {
+          setLoadingMessage(`Đang tạo phương án ${v + 1}/${variantCount}...`);
+        }
+        const variantCfg = {
+          ...genConfig,
+          seed: typeof seed === 'number' ? seed + v : undefined,
+        };
+        const single = modelImage
+          ? await geminiService.editImage(modelImage, finalPrompt, finalRefs, variantCfg)
+          : await geminiService.generateImage(finalPrompt, variantCfg, finalRefs);
+        if (single) generatedBatch.push(single);
+      }
+
+      if (generatedBatch.length > 0) {
         playSuccessSound();
-        setResultImage(resultBase64);
-        addToHistory({
-          url: formatImageSrc(resultBase64),
-          prompt: finalPrompt,
-          mode: 'IMAGE_EDITOR'
+        setVariantImages(generatedBatch);
+        setResultImage(generatedBatch[0]);
+        generatedBatch.forEach((b64) => {
+          addToHistory({
+            url: formatImageSrc(b64),
+            prompt: finalPrompt,
+            mode: 'IMAGE_EDITOR'
+          });
         });
       } else throw new Error("Không nhận được dữ liệu ảnh.");
     } catch (err: any) { 
@@ -766,6 +804,61 @@ const ImageEditor: React.FC = () => {
                         {/* CHẤT LƯỢNG XỬ LÝ */}
                         <ModelSelector selectedModelId={selectedModelId} onModelSelect={handleModelSelect} />
 
+                        {/* MỨC SUY LUẬN AI CHO NANO BANANA 2.1 */}
+                        {(selectedModelId === FLOW_MODEL_IDS.IMAGE_NANO_BANANA_2_1 || selectedModelId === 'gemini-nano-banana-2.1') && (
+                          <div className="space-y-2 animate-in fade-in slide-in-from-top-1">
+                            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest px-1 block">
+                              Mức độ suy luận (Nano Banana 2.1)
+                            </span>
+                            <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-white/10">
+                              {[
+                                { id: 'low' as const, label: 'Thấp (Nhanh)' },
+                                { id: 'medium' as const, label: 'Trung bình' },
+                                { id: 'high' as const, label: 'Cao (Chi tiết)' },
+                              ].map((lvl) => (
+                                <button
+                                  key={lvl.id}
+                                  type="button"
+                                  onClick={() => setThinkingLevel(lvl.id)}
+                                  className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                                    thinkingLevel === lvl.id
+                                      ? 'bg-emerald-500 text-white shadow-md'
+                                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                                  }`}
+                                >
+                                  {lvl.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* SỐ PHƯƠNG ÁN TẠO CÙNG LÚC (MULTI-VARIANT) */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between px-1">
+                            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                              Số phương án / lượt
+                            </span>
+                            <span className="text-[9px] font-bold text-blue-500">So sánh nhanh</span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-white/10">
+                            {([1, 2, 4] as const).map((cnt) => (
+                              <button
+                                key={cnt}
+                                type="button"
+                                onClick={() => setVariantCount(cnt)}
+                                className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                                  variantCount === cnt
+                                    ? 'bg-blue-600 text-white shadow-md'
+                                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                                }`}
+                              >
+                                x{cnt} ảnh
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         {/* ĐỘ PHÂN GIẢI & TỶ LỆ */}
                         <div className={`grid ${MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 transition-all duration-300`}>
                             {MODEL_OPTIONS.find(m => m.id === selectedModelId)?.tier === 'pro' && (
@@ -895,17 +988,23 @@ const ImageEditor: React.FC = () => {
                             )}
                         </div>
 
-                        {/* ẢNH THAM CHIẾU */}
+                        {/* ẢNH THAM CHIẾU (MULTI-FUSION TỚI 14 ẢNH) */}
                         <div className="space-y-3">
                             <div className="flex justify-between items-center px-1">
-                                <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">ẢNH THAM CHIẾU ({refImages.length})</label>
+                                <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                                    ẢNH THAM CHIẾU ({refImages.length}/14)
+                                </label>
                                 <button 
+                                    type="button"
                                     onClick={() => setShowLib(!showLib)}
                                     className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wide transition-all ${showLib ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-blue-500'}`}
                                 >
                                     <BookOpen className="w-3 h-3" /> Thư viện
                                 </button>
                             </div>
+                            <p className="text-[9px] text-slate-400 px-1 -mt-1.5">
+                              Nano Banana 2.1 hỗ trợ ghép tới 14 ảnh (tối đa 4 nhân vật + 10 trang phục/phụ kiện/bối cảnh).
+                            </p>
 
                             {!showLib ? (
                                 <div 
@@ -961,6 +1060,53 @@ const ImageEditor: React.FC = () => {
                                 </div>
                             )}
                             <input type="file" ref={refInputRef} onChange={(e) => e.target.files && processFiles(e.target.files, 'ref')} accept="image/*" multiple className="hidden" />
+                        </div>
+
+                        {/* KHÓA MÀU SẮC & CHẤT LIỆU THƯƠNG HIỆU */}
+                        <div className="p-3.5 rounded-2xl bg-slate-100/70 dark:bg-white/5 border border-slate-200 dark:border-white/10 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <input
+                                id="brand-color-lock"
+                                type="checkbox"
+                                checked={colorLockEnabled}
+                                onChange={(e) => setColorLockEnabled(e.target.checked)}
+                                className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                              />
+                              <label
+                                htmlFor="brand-color-lock"
+                                className="text-[10px] font-black text-slate-700 dark:text-slate-200 uppercase tracking-wider cursor-pointer"
+                              >
+                                Khóa mã màu & chất vải chuẩn
+                              </label>
+                            </div>
+                            <span className="text-[8px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-500 uppercase">
+                              Color Lock
+                            </span>
+                          </div>
+                          {colorLockEnabled && (
+                            <div className="grid grid-cols-12 gap-2 pt-1 animate-in fade-in">
+                              <div className="col-span-5 flex items-center gap-2 bg-white dark:bg-black/30 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10">
+                                <input
+                                  type="color"
+                                  aria-label="Chọn mã màu khóa"
+                                  value={lockedHexColor}
+                                  onChange={(e) => setLockedHexColor(e.target.value)}
+                                  className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
+                                />
+                                <span className="text-[10px] font-mono font-bold text-slate-700 dark:text-slate-200 uppercase">
+                                  {lockedHexColor}
+                                </span>
+                              </div>
+                              <input
+                                type="text"
+                                value={lockedFabricNote}
+                                onChange={(e) => setLockedFabricNote(e.target.value)}
+                                placeholder="Chất vải (VD: lụa tơ tằm, kaki, pique...)"
+                                className="col-span-7 px-3 py-1.5 rounded-xl bg-white dark:bg-black/30 border border-slate-200 dark:border-white/10 text-[10px] text-slate-800 dark:text-white outline-none focus:border-blue-500"
+                              />
+                            </div>
+                          )}
                         </div>
 
                         {/* Ý TƯỞNG (PROMPT BUILDER) */}
@@ -1121,7 +1267,7 @@ const ImageEditor: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setSelectedModelId('gemini-3.1-flash-image');
+                                  setSelectedModelId('gemini-nano-banana-2.1');
                                   setError(null);
                                   window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'google' } }));
                                 }}
@@ -1248,6 +1394,46 @@ const ImageEditor: React.FC = () => {
                                 <a href={formatImageSrc(resultImage)} download={`yody-${Date.now()}.png`} className="p-3 bg-white text-blue-900 rounded-2xl shadow-lg hover:scale-110" title="Tải xuống"><Download className="w-4 h-4" /></a>
                             </div>
                         </div>
+
+                        {/* Multi-Variant Selector Strip */}
+                        {variantImages.length > 1 && (
+                          <div className="mt-3 flex items-center gap-2.5 p-2 bg-black/40 border border-white/10 rounded-2xl shrink-0">
+                            <span className="text-[9px] font-black text-slate-300 uppercase tracking-wider px-2">
+                              Phương án ({variantImages.length}):
+                            </span>
+                            <div className="flex gap-2">
+                              {variantImages.map((vImg, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => setResultImage(vImg)}
+                                  className={`w-12 h-12 rounded-xl overflow-hidden border-2 transition-all ${
+                                    resultImage === vImg
+                                      ? 'border-blue-500 scale-105 shadow-lg'
+                                      : 'border-white/10 opacity-60 hover:opacity-100'
+                                  }`}
+                                >
+                                  <img src={formatImageSrc(vImg)} className="w-full h-full object-cover" alt={`Phương án ${idx + 1}`} />
+                                </button>
+                              ))}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadAsZip(
+                                  variantImages.map((v, i) => ({
+                                    filename: `yody_variant_0${i + 1}.png`,
+                                    dataOrUrl: formatImageSrc(v),
+                                  })),
+                                  `yody_variants_${Date.now()}.zip`
+                                )
+                              }
+                              className="ml-2 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-black uppercase tracking-wider flex items-center gap-1"
+                            >
+                              <Download className="w-3 h-3" /> Tải ZIP ({variantImages.length})
+                            </button>
+                          </div>
+                        )}
 
                         {/* Quick Actions below image */}
                         <div className="mt-4 flex gap-3 w-full max-w-md shrink-0">

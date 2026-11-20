@@ -20,6 +20,7 @@ const HistoryGallery = lazy(() => import('./components/HistoryGallery'));
 const UserGuide = lazy(() => import('./components/UserGuide'));
 const PromptLibrary = lazy(() => import('./components/PromptLibrary'));
 const WorkflowStudio = lazy(() => import('./components/WorkflowStudio'));
+const ChatSearch = lazy(() => import('./components/ChatSearch'));
 
 const THEME_STORAGE_KEY = 'yody_theme_mode';
 const ENTERED_STUDIO_KEY = 'yody_entered_studio';
@@ -35,6 +36,7 @@ const KEEP_ALIVE_MODES = new Set<AppMode>([
   AppMode.VIDEO_GENERATOR,
   AppMode.PROMPT_GENERATOR,
   AppMode.WORKFLOW,
+  AppMode.SEARCH_CHAT,
 ]);
 
 const HASH_TO_MODE: Record<string, AppMode> = {
@@ -45,6 +47,7 @@ const HASH_TO_MODE: Record<string, AppMode> = {
   'video-generator': AppMode.VIDEO_GENERATOR,
   'prompt-generator': AppMode.PROMPT_GENERATOR,
   'manual-editor': AppMode.MANUAL_EDITOR,
+  'search-chat': AppMode.SEARCH_CHAT,
   'history': AppMode.HISTORY,
   'guide': AppMode.GUIDE,
   'prompt-library': AppMode.PROMPT_LIBRARY,
@@ -59,7 +62,7 @@ const MODE_TO_HASH: Record<AppMode, string> = {
   [AppMode.VIDEO_GENERATOR]: 'video-generator',
   [AppMode.PROMPT_GENERATOR]: 'prompt-generator',
   [AppMode.MANUAL_EDITOR]: 'manual-editor',
-  [AppMode.SEARCH_CHAT]: 'image-editor',
+  [AppMode.SEARCH_CHAT]: 'search-chat',
   [AppMode.HISTORY]: 'history',
   [AppMode.GUIDE]: 'guide',
   [AppMode.PROMPT_LIBRARY]: 'prompt-library',
@@ -169,6 +172,8 @@ const App: React.FC = () => {
         return <PromptGenerator />;
       case AppMode.MANUAL_EDITOR:
         return <ManualEditor />;
+      case AppMode.SEARCH_CHAT:
+        return <ChatSearch onSwitchMode={setMode} />;
       case AppMode.HISTORY:
         return <HistoryGallery />;
       case AppMode.GUIDE:

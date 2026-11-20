@@ -1,21 +1,23 @@
 import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { toast } from 'sonner';
-import { geminiService, MODEL_OPTIONS, hasRealGeminiCredentials } from '../services/gemini';
+import { geminiService, MODEL_OPTIONS, hasRealGeminiCredentials, normalizeClientModelId } from '../services/gemini';
 import { generateImageViaFlow, isFlowModel, isFlowBackendAvailable, FLOW_TO_GEMINI_MAP, buildFlowUnavailableMessage } from '../services/flowService';
 import { generateImageViaMuse, isMuseModel } from '../services/museService';
 import { ModelSelector } from './ModelSelector';
 import AspectRatioSelector from './AspectRatioSelector';
 import { resizeImage, extractRatioFromPrompt, formatImageSrc } from '../utils/image';
+import { downloadAsZip, sanitizeSkuName } from '../utils/zipExport';
 import { saveState, loadState } from '../utils/storage';
 import { useProject } from '../contexts/ProjectContext';
 import ElapsedTimer from './ElapsedTimer';
 import { 
   Shirt, Sliders, RefreshCw, Maximize2, X, Loader2, Layers, 
   CheckSquare, Square, Box, Columns, Eye, ZoomIn, ZoomOut, ChevronDown, Settings2, ChevronUp,
-  Plus, MessageSquare, DownloadCloud, Trash2, Zap, Image as ImageIcon, Sparkles
+  Plus, MessageSquare, DownloadCloud, Trash2, Zap, Image as ImageIcon, Sparkles, ShieldCheck
 } from 'lucide-react';
 
 const PhotoEditor = lazy(() => import('./PhotoEditor'));
+const VirtualTryOn = lazy(() => import('./VirtualTryOn'));
 
 interface GarmentJob {
   id: string;
@@ -24,6 +26,7 @@ interface GarmentJob {
   status: 'pending' | 'processing' | 'completed' | 'error';
   statusMessage?: string;
   prompt: string;
+  qcScore?: number;
 }
 
 const SETTINGS_STORAGE_KEY = 'yody_batch_studio_settings_v2';
@@ -79,6 +82,9 @@ const BatchFashionStudio: React.FC = () => {
   const [isDraggingGarment, setIsDraggingGarment] = useState(false);
 
   const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3.1-flash-lite-image');
+  const [fashionTab, setFashionTab] = useState<'batch' | 'mix'>('batch');
+  const [skuPrefix, setSkuPrefix] = useState<string>('YODY_AW26');
+  const [isRunningQc, setIsRunningQc] = useState<boolean>(false);
   const [imageSize, setImageSize] = useState('1K');
   const [aspectRatio, setAspectRatio] = useState('3:4');
   
@@ -167,7 +173,7 @@ const BatchFashionStudio: React.FC = () => {
                 if (rawSettings) {
                     const s = JSON.parse(rawSettings);
                     if (s.defaultPrompt) setDefaultPrompt(s.defaultPrompt);
-                    if (s.selectedModelId) setSelectedModelId(s.selectedModelId);
+                    if (s.selectedModelId) setSelectedModelId(normalizeClientModelId(s.selectedModelId));
                     if (s.imageSize) setImageSize(s.imageSize);
                     if (s.aspectRatio) setAspectRatio(s.aspectRatio);
                 }
@@ -187,7 +193,7 @@ const BatchFashionStudio: React.FC = () => {
                 }
                 if (savedState.defaultPrompt) setDefaultPrompt(savedState.defaultPrompt);
                 if (savedState.selectedModelId || savedState.modelId) {
-                    setSelectedModelId(savedState.selectedModelId || savedState.modelId);
+                    setSelectedModelId(normalizeClientModelId(savedState.selectedModelId || savedState.modelId));
                 }
                 if (savedState.imageSize) setImageSize(savedState.imageSize);
                 if (savedState.aspectRatio) setAspectRatio(savedState.aspectRatio);
@@ -412,7 +418,7 @@ const BatchFashionStudio: React.FC = () => {
                     (prog, msg) => statusUpdate(msg || `Google Flow (${prog}%)`)
                 );
             } else if (await hasRealGeminiCredentials()) {
-                const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-3.1-flash-image';
+                const fallbackModel = FLOW_TO_GEMINI_MAP[selectedModelId] || 'gemini-nano-banana-2.1';
                 toast.info(`Google Flow chưa kết nối, tự động dùng ${fallbackModel}...`);
                 result = await geminiService.editImage(
                     modelImage,
@@ -440,17 +446,18 @@ const BatchFashionStudio: React.FC = () => {
         statusTimers.forEach(clearTimeout);
 
         if (result) {
-            // Chỉ chạy AI review tự động khi dùng Gemini API trả về base64 trực tiếp
+            let computedQcScore: number | undefined = undefined;
             if (!usingFlow && !usingMuse) {
-                statusUpdate('Đang kiểm duyệt chất lượng...');
+                statusUpdate('Đang kiểm duyệt chất lượng (Decision 1)...');
                 const review = await geminiService.reviewImage(result);
+                computedQcScore = review.score;
                 if (!review.pass) {
-                    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', statusMessage: review.reason || 'Lỗi AI' } : j));
+                    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'error', qcScore: review.score, statusMessage: review.reason || 'Lỗi AI' } : j));
                     return;
                 }
             }
 
-            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'completed', resultBase64: result } : j));
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'completed', resultBase64: result, qcScore: computedQcScore } : j));
             setSelectedJobs(prev => new Set(prev).add(jobId));
             
             // Add to global history
@@ -510,15 +517,78 @@ const BatchFashionStudio: React.FC = () => {
     });
   };
 
-  const handleBulkDownload = () => {
-      jobs.filter(j => selectedJobs.has(j.id) && j.resultBase64).forEach((job, index) => {
-          setTimeout(() => {
-              const link = document.createElement('a');
-              link.href = formatImageSrc(job.resultBase64);
-              link.download = `yody-outfit-${job.id}.png`;
-              link.click();
-          }, index * 400);
-      });
+  const handleBulkDownload = async () => {
+      const targetJobs = jobs.filter(j => selectedJobs.has(j.id) && j.resultBase64);
+      if (targetJobs.length === 0) return;
+      const cleanSku = sanitizeSkuName(skuPrefix, 'YODY_SKU');
+      if (targetJobs.length === 1) {
+          const link = document.createElement('a');
+          link.href = formatImageSrc(targetJobs[0].resultBase64!);
+          link.download = `${cleanSku}_01.png`;
+          link.click();
+          return;
+      }
+      try {
+          toast.info(`Đang đóng gói ${targetJobs.length} ảnh vào file ZIP (${cleanSku})...`);
+          await downloadAsZip(
+              targetJobs.map((job, idx) => ({
+                  filename: `${cleanSku}_${String(idx + 1).padStart(2, '0')}.png`,
+                  dataOrUrl: formatImageSrc(job.resultBase64!),
+              })),
+              `${cleanSku}_Batch_${Date.now()}.zip`
+          );
+          toast.success('Đã xuất file ZIP thành công!');
+      } catch {
+          toast.error('Lỗi khi đóng gói file ZIP.');
+      }
+  };
+
+  const handleRunBatchQc = async () => {
+      const completed = jobs.filter(j => j.status === 'completed' && j.resultBase64);
+      if (completed.length === 0 || isRunningQc) return;
+      const canQc = await hasRealGeminiCredentials();
+      if (!canQc) {
+          window.dispatchEvent(new CustomEvent('open_unlock_modal', { detail: { tab: 'google' } }));
+          toast.info('Cần Gemini API Key để chấm điểm QC tự động bằng Gemini Decision 1.');
+          return;
+      }
+      setIsRunningQc(true);
+      try {
+          for (const item of completed) {
+              let rawB64 = item.resultBase64!;
+              if (rawB64.startsWith('http') || rawB64.startsWith('/')) {
+                  const res = await fetch(rawB64);
+                  const blob = await res.blob();
+                  rawB64 = await new Promise<string>((resolve) => {
+                      const reader = new FileReader();
+                      reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
+                      reader.readAsDataURL(blob);
+                  });
+              }
+              const rev = await geminiService.reviewImage(rawB64);
+              setJobs(prev => prev.map(j => j.id === item.id ? { ...j, qcScore: rev.score ?? (rev.pass ? 90 : 40) } : j));
+          }
+          toast.success('Đã hoàn tất chấm điểm AI Auto-QC!');
+      } catch {
+          toast.error('Không thể hoàn tất chấm điểm QC.');
+      } finally {
+          setIsRunningQc(false);
+      }
+  };
+
+  const handleRegenerateLowQc = async () => {
+      const lowIds = jobs
+        .filter(j => j.status === 'error' || (typeof j.qcScore === 'number' && j.qcScore < 75))
+        .map(j => j.id);
+      if (lowIds.length === 0) {
+          toast.info('Tất cả ảnh đều đạt điểm QC tốt (>= 75%)!');
+          return;
+      }
+      setIsProcessing(true);
+      for (const id of lowIds) {
+          await generateJob(id);
+      }
+      setIsProcessing(false);
   };
 
   const activePrompt = focusedJobId 
@@ -607,18 +677,51 @@ const BatchFashionStudio: React.FC = () => {
 
   return (
     <div ref={containerRef} className="h-full w-full flex flex-col p-2 md:p-4 overflow-hidden">
-      <div className="mb-2 md:mb-4 flex justify-between items-center shrink-0">
+      <div className="mb-2 md:mb-4 flex flex-wrap gap-2 justify-between items-center shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 md:p-2.5 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 shadow-lg shadow-purple-500/30">
             <Shirt className="w-5 h-5 md:w-6 md:h-6 text-white" />
           </div>
           <div>
-            <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white leading-none">Thay Đồ Hàng Loạt</h2>
-            <span className="text-[8px] md:text-[10px] font-black uppercase tracking-widest text-purple-500 block mt-0.5">Tự động ướm thử nhiều trang phục lên mẫu.</span>
+            <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white leading-none">Studio Thay Đồ AI</h2>
+            <span className="text-[8px] md:text-[10px] font-black uppercase tracking-widest text-purple-500 block mt-0.5">
+              {fashionTab === 'batch' ? 'Tự động ướm hàng loạt SKU kèm chấm điểm QC.' : 'Phối nguyên cây Áo + Quần/Váy + Phụ kiện + Khóa màu.'}
+            </span>
           </div>
+        </div>
+
+        {/* Sub-mode Tablist: Batch SKU vs Full Outfit Mix & Match */}
+        <div role="tablist" aria-label="Chế độ thay đồ" className="flex bg-black/10 dark:bg-white/5 p-1 rounded-2xl border border-slate-200 dark:border-white/10">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={fashionTab === 'batch'}
+            onClick={() => setFashionTab('batch')}
+            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+              fashionTab === 'batch' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            🗂️ Hàng loạt SKU
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={fashionTab === 'mix'}
+            onClick={() => setFashionTab('mix')}
+            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+              fashionTab === 'mix' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            👗 Phối bộ (Mix & Match)
+          </button>
         </div>
       </div>
 
+      {fashionTab === 'mix' ? (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>}>
+          <VirtualTryOn embedded />
+        </Suspense>
+      ) : (
       <div className="flex-1 flex flex-col lg:flex-row gap-3 md:gap-4 overflow-hidden">
         {/* Sidebar Controls */}
         <div className={`w-full lg:w-[320px] flex flex-col gap-3 lg:gap-4 transition-all duration-300 shrink-0 order-1 ${showConfig ? 'h-auto max-h-[55vh] lg:max-h-full lg:h-full' : 'h-auto'}`}>
@@ -793,20 +896,51 @@ const BatchFashionStudio: React.FC = () => {
         {/* Main Grid View */}
         <div className="flex-1 flex flex-col overflow-hidden order-2 lg:order-2 relative">
             {/* ... (Keep existing results view logic) ... */}
-            <div className="mb-2 md:mb-3 flex items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
+            <div className="mb-2 md:mb-3 flex flex-wrap gap-2 items-center justify-between bg-white/80 dark:bg-[#11131a]/90 p-2 md:p-3 rounded-2xl border border-slate-200 dark:border-white/10 shadow-lg shrink-0">
                  <div className="flex items-center gap-2 md:gap-3">
                     <span className="text-[9px] md:text-[10px] font-black uppercase text-slate-900 dark:text-white tracking-widest pl-2">
                         Kết quả ({jobs.filter(j => j.status === 'completed').length})
                     </span>
                     {jobs.some(j => j.status === 'completed') && (
-                        <button onClick={toggleSelectAll} className="flex items-center gap-2 px-2 py-1 md:px-3 md:py-1.5 rounded-xl hover:bg-white/10 text-[8px] md:text-[9px] font-black uppercase text-slate-400 border border-transparent hover:border-white/10">
-                            {selectedJobs.size > 0 ? <CheckSquare className="w-3 h-3 text-purple-400" /> : <Square className="w-3 h-3" />} <span className="hidden md:inline">Select All</span>
+                        <>
+                          <button type="button" onClick={toggleSelectAll} className="flex items-center gap-1.5 px-2 py-1 rounded-xl hover:bg-white/10 text-[8px] md:text-[9px] font-black uppercase text-slate-400 border border-transparent hover:border-white/10">
+                              {selectedJobs.size > 0 ? <CheckSquare className="w-3 h-3 text-purple-400" /> : <Square className="w-3 h-3" />} <span className="hidden md:inline">Chọn hết</span>
+                          </button>
+                          <button
+                              type="button"
+                              onClick={handleRunBatchQc}
+                              disabled={isRunningQc}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-[8px] md:text-[9px] font-black uppercase border border-emerald-500/20"
+                          >
+                              {isRunningQc ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                              <span>Chấm QC AI</span>
+                          </button>
+                        </>
+                    )}
+                    {jobs.some(j => j.status === 'error' || (typeof j.qcScore === 'number' && j.qcScore < 75)) && (
+                        <button
+                            type="button"
+                            onClick={handleRegenerateLowQc}
+                            disabled={isProcessing}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[8px] md:text-[9px] font-black uppercase border border-amber-500/30"
+                        >
+                            <RefreshCw className="w-3 h-3" /> Tạo lại ảnh lỗi
                         </button>
                     )}
                 </div>
-                <button onClick={handleBulkDownload} disabled={selectedJobs.size === 0} className="px-3 py-1.5 md:px-5 md:py-2 rounded-xl font-black text-[8px] md:text-[9px] uppercase flex items-center gap-2 transition-all shadow-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:scale-105 hover:shadow-purple-500/40">
-                    <DownloadCloud className="w-3.5 h-3.5" /> <span>Tải xuống ({selectedJobs.size})</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={skuPrefix}
+                    onChange={(e) => setSkuPrefix(e.target.value)}
+                    placeholder="Mã SKU..."
+                    aria-label="Mã SKU đặt tên file ZIP"
+                    className="w-24 md:w-28 px-2.5 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[9px] font-mono font-bold text-slate-700 dark:text-slate-200 outline-none"
+                  />
+                  <button type="button" onClick={handleBulkDownload} disabled={selectedJobs.size === 0} className="px-3 py-1.5 md:px-4 md:py-2 rounded-xl font-black text-[8px] md:text-[9px] uppercase flex items-center gap-1.5 transition-all shadow-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:scale-105 disabled:opacity-40">
+                      <DownloadCloud className="w-3.5 h-3.5" /> <span>Xuất ZIP ({selectedJobs.size})</span>
+                  </button>
+                </div>
             </div>
 
             <div className="flex-1 bg-black/25 rounded-[1.5rem] lg:rounded-[3rem] relative overflow-hidden shadow-2xl border border-white/10 ring-1 ring-inset ring-white/10 flex flex-col min-h-0 isolated-panel">
@@ -828,6 +962,19 @@ const BatchFashionStudio: React.FC = () => {
                                             <div className="absolute top-2 left-2 w-8 h-8 md:w-12 md:h-12 rounded-lg border border-white/20 shadow-lg overflow-hidden bg-black/40 backdrop-blur-sm z-10 transition-transform group-hover:scale-110">
                                                 <LazyImage src={formatImageSrc(job.garmentBase64)} className="w-full h-full object-cover" />
                                             </div>
+                                            {typeof job.qcScore === 'number' && (
+                                              <div
+                                                className={`absolute top-2 right-2 z-10 px-2 py-0.5 rounded-full text-[8px] font-black uppercase backdrop-blur-md border shadow ${
+                                                  job.qcScore >= 80
+                                                    ? 'bg-emerald-500/85 text-white border-emerald-300/40'
+                                                    : job.qcScore >= 65
+                                                    ? 'bg-amber-500/85 text-black border-amber-300/40'
+                                                    : 'bg-red-600/90 text-white border-red-300/40'
+                                                }`}
+                                              >
+                                                QC {job.qcScore}%
+                                              </div>
+                                            )}
                                             <div className="absolute bottom-0 inset-x-0 p-2 md:p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                                 <div className="flex gap-2">
                                                     <button onClick={() => setPreviewImage(job.resultBase64!)} className="p-1.5 bg-white/10 backdrop-blur-md rounded-xl text-white hover:bg-white/30 border border-white/10 shadow-lg"><Maximize2 className="w-3 h-3 md:w-4 md:h-4" /></button>
@@ -883,6 +1030,7 @@ const BatchFashionStudio: React.FC = () => {
             </div>
         </div>
       </div>
+      )}
 
       <input type="file" ref={modelInputRef} onChange={handleModelUpload} accept="image/*" className="hidden" />
       <input type="file" ref={garmentInputRef} onChange={handleGarmentUpload} accept="image/*" multiple className="hidden" />

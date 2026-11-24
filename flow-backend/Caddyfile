@@ -1,0 +1,14 @@
+{$FLOW_DOMAIN} {
+  encode gzip
+
+  request_body {
+    max_size 64MB
+  }
+
+  reverse_proxy flow-backend:8000 {
+    transport http {
+      read_timeout 600s
+      write_timeout 600s
+    }
+  }
+}

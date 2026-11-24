@@ -1,8 +1,8 @@
 # ============================================================
-# Google Flow Backend — Production Dockerfile
-# Base: Official Microsoft Playwright image with Python & Chromium
+# Google Flow Backend — Production Dockerfile (Multi-Arch ARM64/AMD64)
+# Tương thích Oracle Cloud Always Free (Ampere A1) & x86_64
 # ============================================================
-FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
@@ -12,9 +12,11 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000 \
     HOST=0.0.0.0
 
-# Cài đặt thư viện đồ họa hệ thống cho OpenCV và Pillow
+# Thư viện hệ thống tối thiểu cho OpenCV, Pillow & healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
+    ca-certificates \
+    curl \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,16 +24,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Cài đặt Playwright browser chromium
-RUN playwright install chromium
+# Cài đặt Playwright browser Chromium + system deps khớp phiên bản Playwright
+RUN playwright install --with-deps chromium
 
-# Copy toàn bộ mã nguồn backend
+# Copy mã nguồn backend (session/cookie và .env không đóng gói vào image)
 COPY . .
 
-# Tạo sẵn các thư mục cache cần thiết
+# Tạo sẵn các thư mục runtime cần thiết
 RUN mkdir -p media_cache temp_uploads .sessions
 
 EXPOSE 8000
 
-# Khởi động ứng dụng FastAPI
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
+
+# Khởi động FastAPI hỗ trợ biến ${PORT} linh hoạt
+CMD ["sh", "-c", "python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]

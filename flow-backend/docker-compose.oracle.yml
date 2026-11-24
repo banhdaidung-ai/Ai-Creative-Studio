@@ -1,0 +1,47 @@
+services:
+  flow-backend:
+    build: .
+    container_name: flow-backend
+    restart: unless-stopped
+    shm_size: "2gb"
+    env_file:
+      - .env
+    environment:
+      - PORT=8000
+    volumes:
+      - ./.sessions:/app/.sessions
+      - ./media_cache:/app/media_cache
+      - ./temp_uploads:/app/temp_uploads
+    expose:
+      - "8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: flow-caddy
+    restart: unless-stopped
+    depends_on:
+      - flow-backend
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    env_file:
+      - .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

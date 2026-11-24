@@ -4,7 +4,7 @@ Tương tác Google Flow qua Playwright Automation (không cần API key)
 """
 
 import asyncio
-import base64
+import hmac
 import logging
 import os
 import sys
@@ -19,9 +19,8 @@ from typing import Optional
 # ── Ensure src/ modules are importable ───────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -47,14 +46,124 @@ TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 job_store: dict[str, dict] = {}
 
 
+# ── Security & CORS Helpers ───────────────────────────────────────────────────
+def _get_access_token() -> str:
+    """Đọc mã bảo mật FLOW_ACCESS_TOKEN từ biến môi trường (trống = local dev tự do)."""
+    return os.getenv("FLOW_ACCESS_TOKEN", "").strip()
+
+
+def _get_allowed_origins() -> list[str]:
+    """Tổng hợp danh sách domain Frontend được phép gọi CORS."""
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://ai-creative-studio-2026.web.app",
+        "https://ai-creative-studio-2026.firebaseapp.com",
+        "https://ai.yody.io",
+    ]
+    frontend_url = os.getenv("FRONTEND_URL", "").strip()
+    if frontend_url and frontend_url not in origins:
+        origins.append(frontend_url)
+    extra_origins = os.getenv("ALLOWED_ORIGINS", "")
+    for item in extra_origins.split(","):
+        cleaned = item.strip()
+        if cleaned and cleaned not in origins:
+            origins.append(cleaned)
+    return origins
+
+
+async def verify_flow_token(
+    x_flow_token: Optional[str] = Header(default=None, alias="X-Flow-Token"),
+    authorization: Optional[str] = Header(default=None),
+) -> None:
+    """Bảo vệ API bằng header X-Flow-Token (hoặc Authorization: Bearer) khi cấu hình FLOW_ACCESS_TOKEN."""
+    expected = _get_access_token()
+    if not expected:
+        return
+
+    provided = (x_flow_token or "").strip()
+    if not provided and authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Thiếu hoặc sai mã bảo mật X-Flow-Token.",
+        )
+
+
+def _cleanup_old_artifacts_once() -> None:
+    """Dọn file media_cache, temp_uploads và job cũ quá TTL (mặc định 24h) để chạy 24/7 không đầy ổ đĩa."""
+    try:
+        media_ttl_hours = float(os.getenv("MEDIA_TTL_HOURS", "24"))
+    except ValueError:
+        media_ttl_hours = 24.0
+    try:
+        job_ttl_hours = float(os.getenv("JOB_TTL_HOURS", "24"))
+    except ValueError:
+        job_ttl_hours = 24.0
+
+    now = time.time()
+    media_cutoff = now - media_ttl_hours * 3600
+    job_cutoff = now - job_ttl_hours * 3600
+
+    removed_files = 0
+    for target_dir in (MEDIA_DIR, TEMP_UPLOAD_DIR):
+        if not target_dir.exists():
+            continue
+        for entry in target_dir.iterdir():
+            if entry.name == ".gitkeep" or not entry.is_file():
+                continue
+            try:
+                if entry.stat().st_mtime < media_cutoff:
+                    entry.unlink(missing_ok=True)
+                    removed_files += 1
+            except Exception:
+                pass
+
+    stale_job_ids = [
+        jid
+        for jid, jdata in list(job_store.items())
+        if jdata.get("status") in (JobStatus.completed, JobStatus.failed)
+        and (jdata.get("completed_at") or jdata.get("created_at", now)) < job_cutoff
+    ]
+    for jid in stale_job_ids:
+        job_store.pop(jid, None)
+
+    if removed_files or stale_job_ids:
+        logger.info(f"🧹 Janitor 24/7: đã xoá {removed_files} file tạm và {len(stale_job_ids)} job cũ.")
+
+
+async def _cleanup_old_artifacts_loop():
+    """Tác vụ chạy ngầm định kỳ mỗi giờ để giải phóng dung lượng và RAM."""
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            _cleanup_old_artifacts_once()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning(f"Lỗi janitor dọn file tạm: {exc}")
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 AI Creator Studio Backend v2.0 khởi động (Google Flow Playwright Mode)")
     logger.info(f"📂 Session đã lưu: {'✅ Có' if has_valid_session() else '❌ Chưa có (cần login lần đầu)'}")
-    yield
-    logger.info("🛑 Đang tắt server, dọn dẹp browser...")
-    await close_browser()
+    logger.info(f"🔐 Xác thực Token: {'✅ Đang bật' if _get_access_token() else '⚠️ Tắt (Chế độ Local)'}")
+    _cleanup_old_artifacts_once()
+    cleanup_task = asyncio.create_task(_cleanup_old_artifacts_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("🛑 Đang tắt server, dọn dẹp browser...")
+        await close_browser()
 
 
 app = FastAPI(
@@ -66,15 +175,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://ai-creative-studio-2026.web.app",
-        "https://ai-creative-studio-2026.firebaseapp.com",
-        "https://ai.yody.io",
-        os.getenv("FRONTEND_URL", "http://localhost:3000"),
-    ],
-    allow_origin_regex=r"https?://.*",
+    allow_origins=_get_allowed_origins(),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -289,6 +391,7 @@ async def root():
         "mode": "Google Flow Playwright Automation",
         "status": "running",
         "session_ready": has_valid_session(),
+        "auth_required": bool(_get_access_token()),
     }
 
 
@@ -299,11 +402,12 @@ async def health():
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "session_ready": has_valid_session(),
+        "auth_required": bool(_get_access_token()),
         "active_jobs": len([j for j in job_store.values() if j["status"] == "processing"]),
     }
 
 
-@app.get("/api/session-status", tags=["Auth"])
+@app.get("/api/session-status", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
 async def session_status():
     """Kiểm tra trạng thái session Google Flow."""
     return {
@@ -311,12 +415,12 @@ async def session_status():
         "message": (
             "Session hợp lệ — sẵn sàng tạo nội dung"
             if has_valid_session()
-            else "Chưa có session. Cần cấu hình GOOGLE_EMAIL và GOOGLE_PASSWORD trong .env"
+            else "Chưa có session. Cần nạp cookie qua sync_session_to_cloud.py hoặc setup_session.py"
         ),
     }
 
 
-@app.post("/api/enhance-prompt", response_model=EnhancePromptResponse, tags=["AI"])
+@app.post("/api/enhance-prompt", response_model=EnhancePromptResponse, tags=["AI"], dependencies=[Depends(verify_flow_token)])
 async def enhance_prompt(request: EnhancePromptRequest):
     """Tối ưu prompt (dùng Gemini nếu có key, không thì rule-based)."""
     enhanced = await enhance_prompt_simple(request.prompt, request.mode)
@@ -350,7 +454,7 @@ def format_job_response(job: dict) -> dict:
 
 
 # ── Endpoint: Generate Image (Nano Banana Pro / 2 / 2 Lite) ──────────────────
-@app.post("/api/generate-image", tags=["Generation"])
+@app.post("/api/generate-image", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def generate_image_endpoint(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -432,7 +536,7 @@ async def generate_image_endpoint(
 
 
 # ── Endpoint: Generate Video (Omni 1.2 Flash / Veo 3.1 Lite) ──────────────────
-@app.post("/api/generate-video", tags=["Generation"])
+@app.post("/api/generate-video", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def generate_video_endpoint(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -515,7 +619,7 @@ async def generate_video_endpoint(
 
 
 # ── Endpoint: Unified Generate (Backward Compatibility) ──────────────────────
-@app.post("/api/generate", tags=["Generation"])
+@app.post("/api/generate", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def generate(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -587,7 +691,7 @@ async def generate(
 
 
 # ── Polling Endpoints: /api/tasks/{task_id} & /api/job/{job_id} ──────────────
-@app.get("/api/tasks/{task_id}", tags=["Generation"])
+@app.get("/api/tasks/{task_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def get_task_status(task_id: str):
     """Poll trạng thái tiến độ và kết quả theo task_id."""
     job = job_store.get(task_id)
@@ -596,7 +700,7 @@ async def get_task_status(task_id: str):
     return format_job_response(job)
 
 
-@app.get("/api/job/{job_id}", tags=["Generation"])
+@app.get("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def get_job_status(job_id: str):
     """Poll trạng thái tiến độ và kết quả (tương thích endpoint Frontend)."""
     job = job_store.get(job_id)
@@ -605,8 +709,8 @@ async def get_job_status(job_id: str):
     return format_job_response(job)
 
 
-@app.delete("/api/job/{job_id}", tags=["Generation"])
-@app.delete("/api/tasks/{job_id}", tags=["Generation"])
+@app.delete("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.delete("/api/tasks/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
 async def cancel_job(job_id: str):
     """Xoá job/task khỏi store."""
     if job_id in job_store:
@@ -615,7 +719,7 @@ async def cancel_job(job_id: str):
     raise HTTPException(status_code=404, detail="Job không tồn tại.")
 
 
-@app.get("/api/models", tags=["Info"])
+@app.get("/api/models", tags=["Info"], dependencies=[Depends(verify_flow_token)])
 async def list_models():
     """Danh sách model Google Flow sẵn có (Cập nhật 11/2026)."""
     return {
@@ -653,7 +757,7 @@ async def list_models():
     }
 
 
-@app.post("/api/clear-session", tags=["Auth"])
+@app.post("/api/clear-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
 async def clear_session():
     """Xoá session đã lưu — dùng khi cần đăng nhập lại."""
     from session_manager import clear_cookies
@@ -667,7 +771,7 @@ class ImportSessionPayload(BaseModel):
     cookies: list[dict]
 
 
-@app.post("/api/import-session", tags=["Auth"])
+@app.post("/api/import-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
 async def import_session(payload: ImportSessionPayload):
     """Cập nhật / Import session cookies cho backend từ xa."""
     from session_manager import save_cookies
@@ -679,9 +783,14 @@ async def import_session(payload: ImportSessionPayload):
     return {"success": True, "message": f"Đã lưu thành công {len(payload.cookies)} cookies"}
 
 
-@app.get("/api/export-session", tags=["Auth"])
+@app.get("/api/export-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
 async def export_session():
-    """Xuất session cookies hiện tại (dùng để đồng bộ lên Cloud)."""
+    """Xuất session cookies hiện tại — mặc định bị khóa trên Cloud vì lý do bảo mật."""
+    if os.getenv("ALLOW_SESSION_EXPORT", "false").strip().lower() != "true":
+        raise HTTPException(
+            status_code=403,
+            detail="Endpoint /api/export-session bị khóa mặc định trên Cloud vì lý do bảo mật.",
+        )
     from session_manager import load_cookies
     cookies = load_cookies()
     if not cookies:

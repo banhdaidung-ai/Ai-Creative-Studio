@@ -4,7 +4,12 @@ __pycache__
 *.pyo
 *.pyd
 .DS_Store
+.env
+.env.*
+!.env.example
+*.log
+.sessions/*
+!.sessions/.gitignore
 media_cache/*
 temp_uploads/*
-!media_cache/.gitkeep
-!temp_uploads/.gitkeep
+inspect_*.py

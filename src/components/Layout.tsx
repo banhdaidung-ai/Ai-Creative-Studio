@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppMode } from '../types';
-import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, Loader2, RefreshCw, Box, History, HelpCircle, Grid, Globe, Wifi, ExternalLink } from 'lucide-react';
+import { Sparkles, Eraser, Camera, Moon, Sun, User, Shirt, Film, Lightbulb, Edit3, Key, Crown, X, Loader2, RefreshCw, Box, History, HelpCircle, Grid, Globe, Wifi, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
-import { isFlowBackendAvailable, invalidateFlowHealthCache, isLanOrLocalHostname } from '../services/flowService';
+import { isFlowBackendAvailable, invalidateFlowHealthCache, isLanOrLocalHostname, verifyFlowBackendConnection } from '../services/flowService';
 import { getMuseReadyStatus, fetchSystemInfo, getMuseAdminUrl } from '../services/museService';
 
 interface LayoutProps {
@@ -31,6 +31,8 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [configType, setConfigType] = useState<'google' | 'vertex' | 'flow' | 'muse'>('google');
   const [flowBackendUrl, setFlowBackendUrl] = useState('');
+  const [flowAccessToken, setFlowAccessToken] = useState('');
+  const [showFlowToken, setShowFlowToken] = useState(false);
   const [flowBackendStatus, setFlowBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [museBackendStatus, setMuseBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [museAccounts, setMuseAccounts] = useState<number>(0);
@@ -109,6 +111,8 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
       setVertexLocation(localStorage.getItem('vertex_location') || 'us-central1');
       setVertexAccessToken(localStorage.getItem('vertex_access_token') || '');
       setFlowBackendUrl(localStorage.getItem('flow_backend_url') || '');
+      setFlowAccessToken(localStorage.getItem('flow_access_token') || '');
+      setShowFlowToken(false);
       checkFlowStatus();
       checkMuseStatus();
       if (initialTab) {
@@ -123,20 +127,30 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   const handleSaveFlowBackend = async () => {
     setIsVerifying(true);
     setFlowBackendStatus('checking');
-    const trimmed = flowBackendUrl.trim();
-    if (trimmed) {
-      localStorage.setItem('flow_backend_url', trimmed);
+    const trimmedUrl = flowBackendUrl.trim();
+    const trimmedToken = flowAccessToken.trim();
+    if (trimmedUrl) {
+      localStorage.setItem('flow_backend_url', trimmedUrl);
     } else {
       localStorage.removeItem('flow_backend_url');
     }
-    invalidateFlowHealthCache();
-    const ok = await isFlowBackendAvailable(true);
-    setFlowBackendStatus(ok ? 'connected' : 'disconnected');
-    setIsVerifying(false);
-    if (ok) {
-      toast.success('Đã kết nối thành công đến Google Flow Backend!');
+    if (trimmedToken) {
+      localStorage.setItem('flow_access_token', trimmedToken);
     } else {
-      toast.error('Không thể kết nối đến URL Backend này. Vui lòng kiểm tra lại địa chỉ hoặc đảm bảo backend đang chạy.');
+      localStorage.removeItem('flow_access_token');
+    }
+    invalidateFlowHealthCache();
+    const status = await verifyFlowBackendConnection();
+    setFlowBackendStatus(status.connected && status.authorized ? 'connected' : 'disconnected');
+    setIsVerifying(false);
+    if (status.connected && status.authorized) {
+      if (status.hasSession) {
+        toast.success(status.message);
+      } else {
+        toast.warning(status.message);
+      }
+    } else {
+      toast.error(status.message);
     }
   };
 
@@ -649,16 +663,52 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
 
                                         <div className="space-y-1">
                                             <div className="flex items-center justify-between text-[10px]">
-                                                <span className="text-slate-400">Địa chỉ Backend URL</span>
+                                                <label htmlFor="flow-backend-url" className="text-slate-400">Địa chỉ Backend URL</label>
                                                 <span className="text-[9px] text-slate-500">Mặc định: /api/flow</span>
                                             </div>
                                             <input 
-                                                type="text" 
+                                                id="flow-backend-url"
+                                                name="flow_backend_url"
+                                                type="url"
+                                                autoCorrect="off"
+                                                autoCapitalize="none"
+                                                spellCheck={false}
                                                 value={flowBackendUrl}
                                                 onChange={(e) => setFlowBackendUrl(e.target.value)}
-                                                placeholder="Để trống dùng tự động, hoặc http://192.168.0.2:8000" 
-                                                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-white outline-none focus:border-emerald-500 transition-all font-mono"
+                                                placeholder="https://129-150-xx-xx.sslip.io (hoặc để trống tự động)" 
+                                                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
                                             />
+                                        </div>
+
+                                        <div className="space-y-1">
+                                            <div className="flex items-center justify-between text-[10px]">
+                                                <label htmlFor="flow-access-token" className="text-slate-400">Mã bảo mật (Flow Access Token)</label>
+                                                <span className="text-[9px] text-slate-500">Bắt buộc khi dùng Oracle Cloud</span>
+                                            </div>
+                                            <div className="relative flex items-center">
+                                                <input
+                                                    id="flow-access-token"
+                                                    name="flow_access_token"
+                                                    type={showFlowToken ? 'text' : 'password'}
+                                                    autoComplete="off"
+                                                    autoCorrect="off"
+                                                    autoCapitalize="none"
+                                                    spellCheck={false}
+                                                    value={flowAccessToken}
+                                                    onChange={(e) => setFlowAccessToken(e.target.value)}
+                                                    placeholder="Dán FLOW_ACCESS_TOKEN (để trống nếu chạy Local)..."
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg pl-3 pr-9 py-2 text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowFlowToken((prev) => !prev)}
+                                                    aria-pressed={showFlowToken}
+                                                    aria-label={showFlowToken ? 'Ẩn mã bảo mật Flow' : 'Hiện mã bảo mật Flow'}
+                                                    className="absolute right-2 p-1 text-slate-400 hover:text-white rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                                                >
+                                                    {showFlowToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <div className="p-2.5 bg-white/5 rounded-xl border border-white/5 text-[9px] text-slate-400 space-y-1.5 leading-relaxed">
@@ -668,24 +718,25 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                                     <Globe className="w-3 h-3 text-amber-400" />
                                                     Đang mở từ Web Online ({window.location.hostname}):
                                                 </p>
-                                                <p>• Trên máy Mac đang chạy backend: mở trực tiếp <a href="http://localhost:3000" className="text-emerald-400 underline font-bold">http://localhost:3000</a>, hoặc bấm biểu tượng ổ khóa trên thanh URL Chrome → bật <strong>Local network access = Allow</strong>.</p>
-                                                <p>• Truy cập từ xa 24/7: dán địa chỉ HTTPS Cloud Run / Cloudflare Tunnel vào ô Backend URL ở trên.</p>
+                                                <p>• <strong>Chạy Cloud 24/7 (Oracle Cloud miễn phí)</strong>: Dán URL <code className="text-emerald-300 font-mono">https://&lt;ip-gach-ngang&gt;.sslip.io</code> + <code className="text-emerald-300 font-mono">FLOW_ACCESS_TOKEN</code> vào 2 ô trên để tắt máy Mac vẫn dùng bình thường.</p>
+                                                <p>• <strong>Chạy Local trên máy Mac</strong>: Mở <a href="http://localhost:3000" className="text-emerald-400 underline font-bold">http://localhost:3000</a>, hoặc bấm biểu tượng ổ khóa trên thanh URL Chrome → bật <strong>Local network access = Allow</strong>.</p>
                                               </>
                                             ) : (
                                               <>
                                                 <p className="text-slate-300 font-bold flex items-center gap-1">
                                                     <Wifi className="w-3 h-3 text-emerald-400" />
-                                                    Mở trên máy khác cùng Wi-Fi:
+                                                    Mở trên máy khác cùng Wi-Fi hoặc Oracle Cloud:
                                                 </p>
-                                                <p>Truy cập vào địa chỉ IP mạng của máy chủ: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">{networkUrl || window.location.origin}</code></p>
-                                                <p className="text-slate-500 text-[8px]">Hệ thống sẽ tự động chuyển tiếp yêu cầu đến Google Flow Backend trên máy Mac.</p>
+                                                <p>Để trống 2 ô trên khi dùng cục bộ, hoặc truy cập LAN tại: <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded font-mono">{networkUrl || window.location.origin}</code></p>
+                                                <p className="text-slate-500 text-[8px]">Nếu đã triển khai lên Oracle Cloud, dán URL HTTPS sslip.io + Access Token vào đây để dùng chung.</p>
                                               </>
                                             )}
                                         </div>
 
                                         <div className="flex gap-2">
                                             <button 
-                                                onClick={handleSaveFlowBackend} 
+                                                type="button"
+                                                onClick={handleSaveFlowBackend}  
                                                 disabled={isVerifying}
                                                 className="flex-1 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
                                             >

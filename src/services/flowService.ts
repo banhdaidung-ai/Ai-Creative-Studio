@@ -156,13 +156,40 @@ function withLoopbackInit(url: string, init: RequestInit = {}): RequestInit {
   return init;
 }
 
+export function getFlowAccessToken(): string {
+  const localToken =
+    typeof window !== 'undefined' ? localStorage.getItem('flow_access_token')?.trim() : '';
+  const envToken =
+    typeof import.meta !== 'undefined' && import.meta.env
+      ? String((import.meta.env as Record<string, any>).VITE_FLOW_ACCESS_TOKEN || '').trim()
+      : '';
+  return localToken || envToken || '';
+}
+
+function withFlowRequestInit(url: string, init: RequestInit = {}): RequestInit {
+  const baseInit = withLoopbackInit(url, init);
+  const token = getFlowAccessToken();
+  if (!token) {
+    return baseInit;
+  }
+
+  const headers = new Headers(baseInit.headers || {});
+  if (!headers.has('X-Flow-Token')) {
+    headers.set('X-Flow-Token', token);
+  }
+  return {
+    ...baseInit,
+    headers,
+  };
+}
+
 export function buildFlowUnavailableMessage(): string {
   const isLocal = typeof window === 'undefined' || isLanOrLocalHostname(window.location.hostname);
   if (!isLocal) {
     return (
       'FLOW_BACKEND_UNAVAILABLE: Trang web online chưa kết nối được tới Google Flow Backend. ' +
       'Để dùng Google Flow: (1) Nếu đang dùng trên máy Mac chạy backend, hãy mở bản Local tại http://localhost:3000 hoặc bật quyền "Local network access = Allow" trên biểu tượng ổ khóa thanh địa chỉ Chrome; ' +
-      '(2) Hoặc nhập URL Cloud Run / Tunnel trong Cấu hình Google Flow; ' +
+      '(2) Hoặc nhập URL Oracle Cloud HTTPS + Access Token trong Cấu hình Google Flow; ' +
       '(3) Hoặc nhập Gemini API Key để tạo ảnh trực tiếp trên web.'
     );
   }
@@ -260,6 +287,11 @@ async function parseJsonResponse<T = any>(res: Response, endpointDesc: string): 
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      throw new Error(
+        'FLOW_UNAUTHORIZED: Mã bảo mật Google Flow (Access Token) chưa đúng hoặc chưa được nhập. Vui lòng kiểm tra trong mục Cấu hình Google Flow.'
+      );
+    }
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
     throw new Error(err.detail || err.error || `${endpointDesc} thất bại (HTTP ${res.status})`);
   }
@@ -270,12 +302,14 @@ async function parseJsonResponse<T = any>(res: Response, endpointDesc: string): 
 // ── Session ───────────────────────────────────────────────────────────────────
 
 export async function checkFlowSession(): Promise<FlowSessionStatus> {
-  const res = await fetch(getFlowApiUrl('/session-status'));
+  const url = getFlowApiUrl('/session-status');
+  const res = await fetch(url, withFlowRequestInit(url));
   return parseJsonResponse<FlowSessionStatus>(res, 'Kiểm tra phiên đăng nhập Flow');
 }
 
 export async function clearFlowSession(): Promise<void> {
-  const res = await fetch(getFlowApiUrl('/clear-session'), { method: 'POST' });
+  const url = getFlowApiUrl('/clear-session');
+  const res = await fetch(url, withFlowRequestInit(url, { method: 'POST' }));
   return parseJsonResponse(res, 'Xóa phiên Flow');
 }
 
@@ -283,7 +317,7 @@ export async function clearFlowSession(): Promise<void> {
 
 export async function getFlowJobStatus(jobId: string): Promise<FlowJobStatus> {
   const url = getFlowApiUrl(`/job/${jobId}`);
-  const res = await fetch(url, withLoopbackInit(url));
+  const res = await fetch(url, withFlowRequestInit(url));
   return parseJsonResponse<FlowJobStatus>(res, `Kiểm tra trạng thái job ${jobId}`);
 }
 
@@ -360,7 +394,7 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
   const submitUrl = getFlowApiUrl('/generate-image');
   const res = await fetch(
     submitUrl,
-    withLoopbackInit(submitUrl, {
+    withFlowRequestInit(submitUrl, {
       method: 'POST',
       body: formData,
     })
@@ -440,7 +474,12 @@ export async function generateImageViaFlow(
   } catch (err: any) {
     console.warn('Backend flow fail', err);
     const msg = err.message || '';
-    if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
+    if (
+      msg.includes('thất bại') ||
+      msg.includes('Google Flow Backend chưa khả dụng') ||
+      msg.includes('FLOW_BACKEND_UNAVAILABLE') ||
+      msg.includes('FLOW_UNAUTHORIZED')
+    ) {
       throw err;
     }
     throw new Error(err.message || 'Lỗi khi tạo ảnh qua Google Flow.', { cause: err });
@@ -495,7 +534,7 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
   const submitUrl = getFlowApiUrl('/generate-video');
   const res = await fetch(
     submitUrl,
-    withLoopbackInit(submitUrl, {
+    withFlowRequestInit(submitUrl, {
       method: 'POST',
       body: formData,
     })
@@ -537,7 +576,12 @@ export async function generateVideoViaFlow(
   } catch (err: any) {
     console.warn('Backend flow fail', err);
     const msg = err.message || '';
-    if (msg.includes('thất bại') || msg.includes('Google Flow Backend chưa khả dụng') || msg.includes('FLOW_BACKEND_UNAVAILABLE')) {
+    if (
+      msg.includes('thất bại') ||
+      msg.includes('Google Flow Backend chưa khả dụng') ||
+      msg.includes('FLOW_BACKEND_UNAVAILABLE') ||
+      msg.includes('FLOW_UNAUTHORIZED')
+    ) {
       throw err;
     }
     throw new Error(err.message || 'Lỗi khi tạo video qua Google Flow.', { cause: err });
@@ -548,11 +592,15 @@ export async function generateVideoViaFlow(
 
 export async function enhancePromptViaFlow(prompt: string, mode: 'image' | 'video' = 'image'): Promise<string> {
   try {
-    const res = await fetch(getFlowApiUrl('/enhance-prompt'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, mode }),
-    });
+    const url = getFlowApiUrl('/enhance-prompt');
+    const res = await fetch(
+      url,
+      withFlowRequestInit(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, mode }),
+      })
+    );
 
     const data = await parseJsonResponse<{ enhanced_prompt?: string }>(res, 'Tối ưu prompt');
     return data.enhanced_prompt || prompt;
@@ -598,10 +646,11 @@ export async function isFlowBackendAvailable(forceRefresh = false): Promise<bool
 
   const runCheck = async (): Promise<boolean> => {
     const primaryUrl = getFlowApiUrl('/health');
+    const primaryTimeoutMs = primaryUrl.startsWith('https://') ? 4000 : 1500;
 
-    // 1. Thử URL chính nhanh trước (1.5s timeout)
+    // 1. Thử URL chính nhanh trước (4s cho HTTPS Cloud, 1.5s cho Local)
     try {
-      await probeFlowHealthUrl(primaryUrl, 1500);
+      await probeFlowHealthUrl(primaryUrl, primaryTimeoutMs);
       cachedFlowStatus = { available: true, checkedAt: Date.now() };
       return true;
     } catch {
@@ -650,6 +699,122 @@ export async function isFlowBackendAvailable(forceRefresh = false): Promise<bool
   });
 
   return inFlightFlowCheck;
+}
+
+export interface FlowConnectionDiagnostic {
+  connected: boolean;
+  authRequired: boolean;
+  authorized: boolean;
+  hasSession: boolean;
+  message: string;
+}
+
+/**
+ * Kiểm tra đầy đủ kết nối, mã bảo mật X-Flow-Token và trạng thái Cookie Google Flow.
+ */
+export async function verifyFlowBackendConnection(): Promise<FlowConnectionDiagnostic> {
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : '';
+  const healthUrl = getFlowApiUrl('/health');
+  let healthData: { status?: string; session_ready?: boolean; auth_required?: boolean } | null = null;
+
+  try {
+    const res = await fetch(healthUrl, withLoopbackInit(healthUrl, { signal: AbortSignal.timeout(4500) }));
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const json = await res.json().catch(() => null);
+      if (json?.status === 'ok') {
+        healthData = json;
+      }
+    }
+  } catch {
+    healthData = null;
+  }
+
+  if (!healthData && !customUrl) {
+    const localOk = await isFlowBackendAvailable(true);
+    if (localOk) {
+      try {
+        const retryRes = await fetch(
+          getFlowApiUrl('/health'),
+          withLoopbackInit(getFlowApiUrl('/health'), { signal: AbortSignal.timeout(2500) })
+        );
+        if (retryRes.ok) {
+          healthData = await retryRes.json().catch(() => null);
+        }
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  if (!healthData) {
+    cachedFlowStatus = { available: false, checkedAt: Date.now() };
+    return {
+      connected: false,
+      authRequired: false,
+      authorized: false,
+      hasSession: false,
+      message: 'Không thể kết nối đến URL Backend này. Vui lòng kiểm tra tên miền HTTPS, Docker trên Oracle Cloud và cổng 80/443.',
+    };
+  }
+
+  cachedFlowStatus = { available: true, checkedAt: Date.now() };
+
+  const sessionUrl = getFlowApiUrl('/session-status');
+  try {
+    const sessionRes = await fetch(
+      sessionUrl,
+      withFlowRequestInit(sessionUrl, { signal: AbortSignal.timeout(4500) })
+    );
+    if (sessionRes.status === 401) {
+      return {
+        connected: true,
+        authRequired: true,
+        authorized: false,
+        hasSession: Boolean(healthData.session_ready),
+        message: 'Đã thấy Server nhưng Mã bảo mật (Flow Access Token) chưa đúng hoặc bị thiếu.',
+      };
+    }
+    if (!sessionRes.ok) {
+      return {
+        connected: true,
+        authRequired: Boolean(healthData.auth_required),
+        authorized: false,
+        hasSession: Boolean(healthData.session_ready),
+        message: `Kết nối Server thành công nhưng kiểm tra phiên thất bại (HTTP ${sessionRes.status}).`,
+      };
+    }
+
+    const sessionJson = await sessionRes.json().catch(() => ({ has_session: healthData?.session_ready }));
+    const hasSession = Boolean(sessionJson?.has_session);
+    if (!hasSession) {
+      return {
+        connected: true,
+        authRequired: Boolean(healthData.auth_required),
+        authorized: true,
+        hasSession: false,
+        message: 'Đã kết nối & xác thực Oracle Backend thành công, nhưng Server chưa có Cookie Google Flow. Vui lòng chạy sync_session_to_cloud.py trên Mac!',
+      };
+    }
+
+    return {
+      connected: true,
+      authRequired: Boolean(healthData.auth_required),
+      authorized: true,
+      hasSession: true,
+      message: 'Đã kết nối thành công đến Google Flow Backend (Sẵn sàng tạo ảnh/video 24/7)!',
+    };
+  } catch {
+    return {
+      connected: true,
+      authRequired: Boolean(healthData.auth_required),
+      authorized: !healthData.auth_required,
+      hasSession: Boolean(healthData.session_ready),
+      message: healthData.auth_required
+        ? 'Không thể xác thực Token với Server (kiểm tra cấu hình CORS ALLOWED_ORIGINS).'
+        : 'Đã kết nối thành công đến Google Flow Backend!',
+    };
+  }
 }
 
 // ── Model IDs ─────────────────────────────────────────────────────────────────

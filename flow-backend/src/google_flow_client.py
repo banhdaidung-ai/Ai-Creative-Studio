@@ -1068,7 +1068,7 @@ async def _generate_image_on_flow_locked(
             raise RuntimeError("Không tìm thấy ô nhập câu lệnh trên Google Flow.")
 
         await prompt_input.click()
-        await page.keyboard.press("Meta+A")
+        await page.keyboard.press("ControlOrMeta+A")
         await page.keyboard.press("Backspace")
         await prompt_input.fill(effective_prompt)
         await asyncio.sleep(0.5)

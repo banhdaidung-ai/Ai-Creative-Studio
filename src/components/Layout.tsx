@@ -7,7 +7,8 @@ import { geminiService } from '../services/gemini';
 import { toast } from 'sonner';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
-import { isFlowBackendAvailable, invalidateFlowHealthCache, isLanOrLocalHostname, verifyFlowBackendConnection } from '../services/flowService';
+import { auth } from '../lib/firebase';
+import { isFlowBackendAvailable, invalidateFlowHealthCache, isLanOrLocalHostname, verifyFlowBackendConnection, getDefaultCloudFlowUrl } from '../services/flowService';
 import { getMuseReadyStatus, fetchSystemInfo, getMuseAdminUrl } from '../services/museService';
 
 interface LayoutProps {
@@ -79,9 +80,17 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
     return () => clearInterval(interval);
   }, []);
 
+  const isGoogleSignedIn = Boolean(auth.currentUser?.email);
+  const defaultCloudFlowUrl = getDefaultCloudFlowUrl();
+
   const checkFlowStatus = useCallback(async (forceRefresh = false) => {
     setFlowBackendStatus('checking');
-    const available = await isFlowBackendAvailable(forceRefresh);
+    if (forceRefresh) {
+      const diag = await verifyFlowBackendConnection();
+      setFlowBackendStatus(diag.connected && diag.authorized ? 'connected' : 'disconnected');
+      return;
+    }
+    const available = await isFlowBackendAvailable(false);
     setFlowBackendStatus(available ? 'connected' : 'disconnected');
   }, []);
 
@@ -93,7 +102,8 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
   }, []);
 
   useEffect(() => {
-    void checkFlowStatus(false);
+    invalidateFlowHealthCache();
+    void checkFlowStatus(Boolean(auth.currentUser?.email));
     void checkMuseStatus(false);
     fetchSystemInfo()
       .then((info) => {
@@ -101,7 +111,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
         if (info?.museAdminUrl) setMuseAdminUrl(info.museAdminUrl);
       })
       .catch(() => {});
-  }, [checkFlowStatus, checkMuseStatus]);
+  }, [checkFlowStatus, checkMuseStatus, user?.uid]);
 
   const handleOpenUnlock = useCallback((initialTab?: 'google' | 'vertex' | 'flow' | 'muse') => {
       setShowUnlockModal(true);
@@ -113,7 +123,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
       setFlowBackendUrl(localStorage.getItem('flow_backend_url') || '');
       setFlowAccessToken(localStorage.getItem('flow_access_token') || '');
       setShowFlowToken(false);
-      checkFlowStatus();
+      checkFlowStatus(initialTab === 'flow' || Boolean(auth.currentUser?.email));
       checkMuseStatus();
       if (initialTab) {
         setConfigType(initialTab);
@@ -661,10 +671,57 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                             </span>
                                         </div>
 
+                                        {isGoogleSignedIn ? (
+                                          <div className="p-2.5 bg-emerald-500/10 rounded-xl border border-emerald-500/25 text-[10px] text-emerald-200 space-y-1 leading-relaxed">
+                                            <p className="font-bold text-emerald-300 flex items-center gap-1.5">
+                                              ✅ Đã tự động xác thực bằng tài khoản Google ({auth.currentUser?.email})
+                                            </p>
+                                            <p className="text-slate-300 text-[9px]">
+                                              Không cần nhập URL hay Token — mọi yêu cầu tự động kết nối tới:{' '}
+                                              <code className="text-emerald-300 font-mono">
+                                                {flowBackendUrl.trim() || (!isLanOrLocalHostname(window.location.hostname) && defaultCloudFlowUrl) || '/api/flow'}
+                                              </code>
+                                            </p>
+                                          </div>
+                                        ) : !isLanOrLocalHostname(window.location.hostname) ? (
+                                          <div className="p-2.5 bg-amber-500/10 rounded-xl border border-amber-500/25 text-[10px] text-amber-200 space-y-2 leading-relaxed">
+                                            <p className="font-bold text-amber-300">
+                                              ⚠️ Đang ở chế độ Khách — Hãy Đăng nhập Google để kết nối Google Flow 24/7 (0 bước cài đặt)
+                                            </p>
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                try {
+                                                  await signInWithGoogle();
+                                                  invalidateFlowHealthCache();
+                                                  const diag = await verifyFlowBackendConnection();
+                                                  setFlowBackendStatus(diag.connected && diag.authorized ? 'connected' : 'disconnected');
+                                                  if (diag.connected && diag.authorized) {
+                                                    toast.success(diag.message);
+                                                  }
+                                                } catch {
+                                                  toast.error('Đăng nhập Google chưa hoàn tất.');
+                                                }
+                                              }}
+                                              className="w-full py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500 hover:bg-amber-400 text-black transition-all"
+                                            >
+                                              Đăng nhập Google ngay
+                                            </button>
+                                          </div>
+                                        ) : null}
+
+                                        <div className="pt-1 border-t border-white/10">
+                                            <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                                                Tùy chọn nâng cao — dành cho Admin / Server riêng
+                                            </p>
+                                        </div>
+
                                         <div className="space-y-1">
                                             <div className="flex items-center justify-between text-[10px]">
                                                 <label htmlFor="flow-backend-url" className="text-slate-400">Địa chỉ Backend URL</label>
-                                                <span className="text-[9px] text-slate-500">Mặc định: /api/flow</span>
+                                                <span className="text-[9px] text-slate-500">
+                                                  Mặc định: {(!isLanOrLocalHostname(window.location.hostname) && defaultCloudFlowUrl) ? defaultCloudFlowUrl : '/api/flow'}
+                                                </span>
                                             </div>
                                             <input 
                                                 id="flow-backend-url"
@@ -675,15 +732,15 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                                 spellCheck={false}
                                                 value={flowBackendUrl}
                                                 onChange={(e) => setFlowBackendUrl(e.target.value)}
-                                                placeholder="https://129-150-xx-xx.sslip.io (hoặc để trống tự động)" 
+                                                placeholder={defaultCloudFlowUrl || 'https://161-118-200-30.sslip.io (để trống dùng tự động)'} 
                                                 className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[10px] text-white outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
                                             />
                                         </div>
 
                                         <div className="space-y-1">
                                             <div className="flex items-center justify-between text-[10px]">
-                                                <label htmlFor="flow-access-token" className="text-slate-400">Mã bảo mật (Flow Access Token)</label>
-                                                <span className="text-[9px] text-slate-500">Bắt buộc khi dùng Oracle Cloud</span>
+                                                <label htmlFor="flow-access-token" className="text-slate-400">Mã bảo mật Admin (Flow Access Token)</label>
+                                                <span className="text-[9px] text-slate-500">Chỉ dùng cho Admin / Chế độ Khách</span>
                                             </div>
                                             <div className="relative flex items-center">
                                                 <input
@@ -718,7 +775,7 @@ const Layout: React.FC<LayoutProps> = ({ currentMode, onSwitchMode, children, is
                                                     <Globe className="w-3 h-3 text-amber-400" />
                                                     Đang mở từ Web Online ({window.location.hostname}):
                                                 </p>
-                                                <p>• <strong>Chạy Cloud 24/7 (Oracle Cloud miễn phí)</strong>: Dán URL <code className="text-emerald-300 font-mono">https://&lt;ip-gach-ngang&gt;.sslip.io</code> + <code className="text-emerald-300 font-mono">FLOW_ACCESS_TOKEN</code> vào 2 ô trên để tắt máy Mac vẫn dùng bình thường.</p>
+                                                <p>• <strong>Tài khoản Google (Zero-Config)</strong>: Chỉ cần Đăng nhập Google trên web là tự động kết nối Google Flow 24/7, không cần điền 2 ô trên.</p>
                                                 <p>• <strong>Chạy Local trên máy Mac</strong>: Mở <a href="http://localhost:3000" className="text-emerald-400 underline font-bold">http://localhost:3000</a>, hoặc bấm biểu tượng ổ khóa trên thanh URL Chrome → bật <strong>Local network access = Allow</strong>.</p>
                                               </>
                                             ) : (

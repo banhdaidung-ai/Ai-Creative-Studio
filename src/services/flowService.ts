@@ -6,6 +6,8 @@
  * sử dụng tài khoản Google Flow của người dùng.
  */
 
+import { auth } from '../lib/firebase';
+
 const FLOW_PROXY_BASE = '/api/flow';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -156,6 +158,12 @@ function withLoopbackInit(url: string, init: RequestInit = {}): RequestInit {
   return init;
 }
 
+export function getDefaultCloudFlowUrl(): string {
+  return typeof import.meta !== 'undefined' && import.meta.env
+    ? String((import.meta.env as Record<string, any>).VITE_FLOW_BACKEND_URL || '').trim()
+    : '';
+}
+
 export function getFlowAccessToken(): string {
   const localToken =
     typeof window !== 'undefined' ? localStorage.getItem('flow_access_token')?.trim() : '';
@@ -166,16 +174,35 @@ export function getFlowAccessToken(): string {
   return localToken || envToken || '';
 }
 
-function withFlowRequestInit(url: string, init: RequestInit = {}): RequestInit {
+async function getFirebaseIdToken(): Promise<string> {
+  try {
+    if (!auth.currentUser && typeof auth.authStateReady === 'function') {
+      await auth.authStateReady();
+    }
+    const currentUser = auth.currentUser;
+    if (!currentUser) return '';
+    const token = await currentUser.getIdToken();
+    return token && token !== 'demo-token' ? token : '';
+  } catch {
+    return '';
+  }
+}
+
+async function buildFlowRequestInit(url: string, init: RequestInit = {}): Promise<RequestInit> {
   const baseInit = withLoopbackInit(url, init);
-  const token = getFlowAccessToken();
-  if (!token) {
+  const accessToken = getFlowAccessToken();
+  const firebaseToken = await getFirebaseIdToken();
+
+  if (!accessToken && !firebaseToken) {
     return baseInit;
   }
 
   const headers = new Headers(baseInit.headers || {});
-  if (!headers.has('X-Flow-Token')) {
-    headers.set('X-Flow-Token', token);
+  if (accessToken && !headers.has('X-Flow-Token')) {
+    headers.set('X-Flow-Token', accessToken);
+  }
+  if (firebaseToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${firebaseToken}`);
   }
   return {
     ...baseInit,
@@ -188,9 +215,9 @@ export function buildFlowUnavailableMessage(): string {
   if (!isLocal) {
     return (
       'FLOW_BACKEND_UNAVAILABLE: Trang web online chưa kết nối được tới Google Flow Backend. ' +
-      'Để dùng Google Flow: (1) Nếu đang dùng trên máy Mac chạy backend, hãy mở bản Local tại http://localhost:3000 hoặc bật quyền "Local network access = Allow" trên biểu tượng ổ khóa thanh địa chỉ Chrome; ' +
-      '(2) Hoặc nhập URL Oracle Cloud HTTPS + Access Token trong Cấu hình Google Flow; ' +
-      '(3) Hoặc nhập Gemini API Key để tạo ảnh trực tiếp trên web.'
+      'Để dùng Google Flow: (1) Vui lòng Đăng nhập Google trên web để tự động kết nối máy chủ Cloud 24/7; ' +
+      '(2) Hoặc nhập URL + Access Token thủ công trong Cấu hình Google Flow; ' +
+      '(3) Hoặc nhập Gemini API Key để tạo ảnh trực tiếp.'
     );
   }
   return (
@@ -201,23 +228,17 @@ export function buildFlowUnavailableMessage(): string {
 
 export function getFlowApiUrl(endpoint: string): string {
   const customUrl = typeof window !== 'undefined' ? localStorage.getItem('flow_backend_url')?.trim() : undefined;
-  const envUrl = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FLOW_BACKEND_URL ? import.meta.env.VITE_FLOW_BACKEND_URL : undefined;
+  const envUrl = getDefaultCloudFlowUrl() || undefined;
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
-  let targetBase = customUrl || envUrl || detectedWorkingBase;
+  const isLocalOrLan = typeof window === 'undefined' || isLanOrLocalHostname(window.location.hostname);
+  let targetBase = isLocalOrLan
+    ? (customUrl || detectedWorkingBase)
+    : (customUrl || envUrl || detectedWorkingBase);
 
-  // Nếu không cấu hình thủ công:
-  // - Khi truy cập qua localhost hoặc mạng LAN (máy khác trong cùng Wi-Fi truy cập IP 192.168.x.x:3000):
-  //   DÙNG PROXY CHUẨN FLOW_PROXY_BASE (/api/flow)!
-  //   Vì máy chủ Node/Vite trên Mac đã có sẵn reverse proxy sang port 8000.
-  //   TUYỆT ĐỐI KHÔNG ép targetBase = 127.0.0.1:8000 ở đây vì máy khác sẽ tự gọi localhost của chính nó và thất bại!
-  // - Chỉ khi chạy trên môi trường hosting public từ xa (Firebase Hosting / Vercel, tức hostname không phải LAN):
-  //   Nếu người dùng đang mở trên chính máy Mac có chạy python backend, thử gán 'http://127.0.0.1:8000'.
-  if (!targetBase && typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (!isLanOrLocalHostname(hostname)) {
-      targetBase = 'http://127.0.0.1:8000';
-    }
+  // Chỉ tự thử http://127.0.0.1:8000 khi chạy web public mà chưa có envUrl / customUrl
+  if (!targetBase && !isLocalOrLan) {
+    targetBase = 'http://127.0.0.1:8000';
   }
 
   if (targetBase) {
@@ -288,8 +309,18 @@ async function parseJsonResponse<T = any>(res: Response, endpointDesc: string): 
 
   if (!res.ok) {
     if (res.status === 401) {
+      if (!auth.currentUser && !getFlowAccessToken()) {
+        throw new Error(
+          'FLOW_UNAUTHORIZED: Vui lòng Đăng nhập Google để tự động kết nối Google Flow 24/7 miễn phí (chế độ Khách không hỗ trợ Cloud Flow).'
+        );
+      }
       throw new Error(
-        'FLOW_UNAUTHORIZED: Mã bảo mật Google Flow (Access Token) chưa đúng hoặc chưa được nhập. Vui lòng kiểm tra trong mục Cấu hình Google Flow.'
+        'FLOW_UNAUTHORIZED: Phiên Đăng nhập Google đã hết hạn hoặc Mã bảo mật chưa đúng. Vui lòng đăng nhập lại hoặc kiểm tra trong Cấu hình Google Flow.'
+      );
+    }
+    if (res.status === 403) {
+      throw new Error(
+        'FLOW_FORBIDDEN: Tài khoản Google của bạn chưa được cấp quyền sử dụng máy chủ Google Flow này.'
       );
     }
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
@@ -303,13 +334,13 @@ async function parseJsonResponse<T = any>(res: Response, endpointDesc: string): 
 
 export async function checkFlowSession(): Promise<FlowSessionStatus> {
   const url = getFlowApiUrl('/session-status');
-  const res = await fetch(url, withFlowRequestInit(url));
+  const res = await fetch(url, await buildFlowRequestInit(url));
   return parseJsonResponse<FlowSessionStatus>(res, 'Kiểm tra phiên đăng nhập Flow');
 }
 
 export async function clearFlowSession(): Promise<void> {
   const url = getFlowApiUrl('/clear-session');
-  const res = await fetch(url, withFlowRequestInit(url, { method: 'POST' }));
+  const res = await fetch(url, await buildFlowRequestInit(url, { method: 'POST' }));
   return parseJsonResponse(res, 'Xóa phiên Flow');
 }
 
@@ -317,7 +348,7 @@ export async function clearFlowSession(): Promise<void> {
 
 export async function getFlowJobStatus(jobId: string): Promise<FlowJobStatus> {
   const url = getFlowApiUrl(`/job/${jobId}`);
-  const res = await fetch(url, withFlowRequestInit(url));
+  const res = await fetch(url, await buildFlowRequestInit(url));
   return parseJsonResponse<FlowJobStatus>(res, `Kiểm tra trạng thái job ${jobId}`);
 }
 
@@ -394,7 +425,7 @@ export async function submitFlowImageJob(options: FlowGenerateImageOptions): Pro
   const submitUrl = getFlowApiUrl('/generate-image');
   const res = await fetch(
     submitUrl,
-    withFlowRequestInit(submitUrl, {
+    await buildFlowRequestInit(submitUrl, {
       method: 'POST',
       body: formData,
     })
@@ -478,7 +509,8 @@ export async function generateImageViaFlow(
       msg.includes('thất bại') ||
       msg.includes('Google Flow Backend chưa khả dụng') ||
       msg.includes('FLOW_BACKEND_UNAVAILABLE') ||
-      msg.includes('FLOW_UNAUTHORIZED')
+      msg.includes('FLOW_UNAUTHORIZED') ||
+      msg.includes('FLOW_FORBIDDEN')
     ) {
       throw err;
     }
@@ -534,7 +566,7 @@ export async function submitFlowVideoJob(options: FlowGenerateVideoOptions): Pro
   const submitUrl = getFlowApiUrl('/generate-video');
   const res = await fetch(
     submitUrl,
-    withFlowRequestInit(submitUrl, {
+    await buildFlowRequestInit(submitUrl, {
       method: 'POST',
       body: formData,
     })
@@ -580,7 +612,8 @@ export async function generateVideoViaFlow(
       msg.includes('thất bại') ||
       msg.includes('Google Flow Backend chưa khả dụng') ||
       msg.includes('FLOW_BACKEND_UNAVAILABLE') ||
-      msg.includes('FLOW_UNAUTHORIZED')
+      msg.includes('FLOW_UNAUTHORIZED') ||
+      msg.includes('FLOW_FORBIDDEN')
     ) {
       throw err;
     }
@@ -595,7 +628,7 @@ export async function enhancePromptViaFlow(prompt: string, mode: 'image' | 'vide
     const url = getFlowApiUrl('/enhance-prompt');
     const res = await fetch(
       url,
-      withFlowRequestInit(url, {
+      await buildFlowRequestInit(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, mode }),
@@ -764,15 +797,35 @@ export async function verifyFlowBackendConnection(): Promise<FlowConnectionDiagn
   try {
     const sessionRes = await fetch(
       sessionUrl,
-      withFlowRequestInit(sessionUrl, { signal: AbortSignal.timeout(4500) })
+      await buildFlowRequestInit(sessionUrl, { signal: AbortSignal.timeout(4500) })
     );
+    const googleEmail = auth.currentUser?.email || '';
+
     if (sessionRes.status === 401) {
+      if (!auth.currentUser && !getFlowAccessToken()) {
+        return {
+          connected: true,
+          authRequired: true,
+          authorized: false,
+          hasSession: Boolean(healthData.session_ready),
+          message: 'Đã thấy Server Oracle Cloud! Vui lòng Đăng nhập Google để tự động kết nối (chế độ Khách chưa được cấp quyền).',
+        };
+      }
       return {
         connected: true,
         authRequired: true,
         authorized: false,
         hasSession: Boolean(healthData.session_ready),
-        message: 'Đã thấy Server nhưng Mã bảo mật (Flow Access Token) chưa đúng hoặc bị thiếu.',
+        message: 'Đã thấy Server nhưng Phiên đăng nhập hoặc Mã bảo mật (Access Token) chưa hợp lệ.',
+      };
+    }
+    if (sessionRes.status === 403) {
+      return {
+        connected: true,
+        authRequired: true,
+        authorized: false,
+        hasSession: Boolean(healthData.session_ready),
+        message: `Tài khoản ${googleEmail || 'của bạn'} chưa nằm trong danh sách được phép trên máy chủ Google Flow này.`,
       };
     }
     if (!sessionRes.ok) {
@@ -802,7 +855,9 @@ export async function verifyFlowBackendConnection(): Promise<FlowConnectionDiagn
       authRequired: Boolean(healthData.auth_required),
       authorized: true,
       hasSession: true,
-      message: 'Đã kết nối thành công đến Google Flow Backend (Sẵn sàng tạo ảnh/video 24/7)!',
+      message: googleEmail
+        ? `Đã tự động kết nối Google Flow 24/7 bằng tài khoản Google (${googleEmail})!`
+        : 'Đã kết nối thành công đến Google Flow Backend (Sẵn sàng tạo ảnh/video 24/7)!',
     };
   } catch {
     return {

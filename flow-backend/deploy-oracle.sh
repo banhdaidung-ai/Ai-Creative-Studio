@@ -163,6 +163,10 @@ CURRENT_ORIGINS="$(get_env_var ALLOWED_ORIGINS)"
 if [[ -z "$CURRENT_ORIGINS" ]]; then
   set_env_var "ALLOWED_ORIGINS" "https://ai-creative-studio-2026.web.app,https://ai-creative-studio-2026.firebaseapp.com,http://localhost:3000"
 fi
+CURRENT_FB_PROJECT="$(get_env_var FIREBASE_PROJECT_ID)"
+if [[ -z "$CURRENT_FB_PROJECT" ]]; then
+  set_env_var "FIREBASE_PROJECT_ID" "ai-creative-studio-2026"
+fi
 set_env_var "ALLOW_SESSION_EXPORT" "false"
 set_env_var "PORT" "8000"
 

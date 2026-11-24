@@ -8,3 +8,5 @@ playwright>=1.48.0
 aiofiles>=23.0.0
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
+google-auth>=2.35.0
+requests>=2.32.0

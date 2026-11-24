@@ -47,9 +47,29 @@ job_store: dict[str, dict] = {}
 
 
 # ── Security & CORS Helpers ───────────────────────────────────────────────────
+_google_auth_request = None
+
+
 def _get_access_token() -> str:
-    """Đọc mã bảo mật FLOW_ACCESS_TOKEN từ biến môi trường (trống = local dev tự do)."""
+    """Đọc mã bảo mật Admin FLOW_ACCESS_TOKEN từ biến môi trường (trống = local dev tự do)."""
     return os.getenv("FLOW_ACCESS_TOKEN", "").strip()
+
+
+def _get_firebase_project_id() -> str:
+    """Đọc Firebase Project ID để xác thực tự động Google Sign-In ID Token."""
+    return os.getenv("FIREBASE_PROJECT_ID", "").strip()
+
+
+def _get_allowed_email_domains() -> list[str]:
+    """Danh sách domain email được phép (trống = cho phép mọi tài khoản Google đã đăng nhập)."""
+    raw = os.getenv("ALLOWED_EMAIL_DOMAINS", "")
+    return [d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip()]
+
+
+def _get_allowed_emails() -> set[str]:
+    """Danh sách email cụ thể được phép ngoại lệ hoặc chỉ định."""
+    raw = os.getenv("ALLOWED_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 def _get_allowed_origins() -> list[str]:
@@ -72,24 +92,97 @@ def _get_allowed_origins() -> list[str]:
     return origins
 
 
-async def verify_flow_token(
+def _extract_bearer(authorization: Optional[str]) -> str:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return ""
+
+
+def _verify_firebase_id_token_sync(id_token_str: str, project_id: str) -> dict:
+    """Xác thực chữ ký JWT của Firebase Auth Google Sign-In bằng khóa công khai Google."""
+    global _google_auth_request
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+
+    if _google_auth_request is None:
+        _google_auth_request = google_requests.Request()
+    return google_id_token.verify_firebase_token(id_token_str, _google_auth_request, audience=project_id)
+
+
+async def _verify_firebase_bearer(token: str) -> dict:
+    project_id = _get_firebase_project_id()
+    try:
+        claims = await asyncio.to_thread(_verify_firebase_id_token_sync, token, project_id)
+    except Exception as exc:
+        logger.warning(f"Firebase ID Token verification failed: {exc}")
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Phiên Đăng nhập Google không hợp lệ hoặc đã hết hạn.",
+        )
+
+    email = str(claims.get("email") or "").strip().lower()
+    allowed_domains = _get_allowed_email_domains()
+    allowed_emails = _get_allowed_emails()
+
+    if allowed_domains or allowed_emails:
+        email_domain = email.split("@")[-1] if "@" in email else ""
+        if email not in allowed_emails and email_domain not in allowed_domains:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Tài khoản {email or 'của bạn'} chưa được cấp quyền sử dụng Google Flow trên máy chủ này.",
+            )
+
+    return {
+        "role": "user",
+        "email": email or "google-user",
+        "uid": claims.get("sub") or claims.get("user_id") or "",
+    }
+
+
+async def verify_admin_token(
     x_flow_token: Optional[str] = Header(default=None, alias="X-Flow-Token"),
     authorization: Optional[str] = Header(default=None),
-) -> None:
-    """Bảo vệ API bằng header X-Flow-Token (hoặc Authorization: Bearer) khi cấu hình FLOW_ACCESS_TOKEN."""
+) -> dict:
+    """Bảo vệ tuyệt đối các endpoint quản trị (/import-session, /clear-session, /export-session)."""
     expected = _get_access_token()
     if not expected:
-        return
+        return {"role": "local-admin", "email": "local"}
 
-    provided = (x_flow_token or "").strip()
-    if not provided and authorization and authorization.lower().startswith("bearer "):
-        provided = authorization[7:].strip()
-
+    provided = (x_flow_token or "").strip() or _extract_bearer(authorization)
     if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(
             status_code=401,
-            detail="Unauthorized: Thiếu hoặc sai mã bảo mật X-Flow-Token.",
+            detail="Unauthorized: Endpoint quản trị yêu cầu mã FLOW_ACCESS_TOKEN hợp lệ.",
         )
+    return {"role": "admin", "email": "admin-token"}
+
+
+async def verify_flow_access(
+    x_flow_token: Optional[str] = Header(default=None, alias="X-Flow-Token"),
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """Cho phép Admin Token (X-Flow-Token) HOẶC bất kỳ tài khoản Google đã đăng nhập qua Firebase Auth."""
+    expected = _get_access_token()
+    fb_project = _get_firebase_project_id()
+
+    if not expected and not fb_project:
+        return {"role": "local", "email": "local"}
+
+    header_token = (x_flow_token or "").strip()
+    bearer_token = _extract_bearer(authorization)
+
+    if expected:
+        for candidate in (header_token, bearer_token):
+            if candidate and hmac.compare_digest(candidate, expected):
+                return {"role": "admin", "email": "admin-token"}
+
+    if fb_project and bearer_token and bearer_token != "demo-token":
+        return await _verify_firebase_bearer(bearer_token)
+
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized: Vui lòng Đăng nhập Google (hoặc nhập Flow Access Token) để sử dụng Google Flow.",
+    )
 
 
 def _cleanup_old_artifacts_once() -> None:
@@ -391,7 +484,8 @@ async def root():
         "mode": "Google Flow Playwright Automation",
         "status": "running",
         "session_ready": has_valid_session(),
-        "auth_required": bool(_get_access_token()),
+        "auth_required": bool(_get_access_token() or _get_firebase_project_id()),
+        "firebase_auth_enabled": bool(_get_firebase_project_id()),
     }
 
 
@@ -402,12 +496,13 @@ async def health():
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "session_ready": has_valid_session(),
-        "auth_required": bool(_get_access_token()),
+        "auth_required": bool(_get_access_token() or _get_firebase_project_id()),
+        "firebase_auth_enabled": bool(_get_firebase_project_id()),
         "active_jobs": len([j for j in job_store.values() if j["status"] == "processing"]),
     }
 
 
-@app.get("/api/session-status", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
+@app.get("/api/session-status", tags=["Auth"], dependencies=[Depends(verify_flow_access)])
 async def session_status():
     """Kiểm tra trạng thái session Google Flow."""
     return {
@@ -420,7 +515,7 @@ async def session_status():
     }
 
 
-@app.post("/api/enhance-prompt", response_model=EnhancePromptResponse, tags=["AI"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/enhance-prompt", response_model=EnhancePromptResponse, tags=["AI"], dependencies=[Depends(verify_flow_access)])
 async def enhance_prompt(request: EnhancePromptRequest):
     """Tối ưu prompt (dùng Gemini nếu có key, không thì rule-based)."""
     enhanced = await enhance_prompt_simple(request.prompt, request.mode)
@@ -454,7 +549,7 @@ def format_job_response(job: dict) -> dict:
 
 
 # ── Endpoint: Generate Image (Nano Banana Pro / 2 / 2 Lite) ──────────────────
-@app.post("/api/generate-image", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/generate-image", tags=["Generation"])
 async def generate_image_endpoint(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -465,6 +560,7 @@ async def generate_image_endpoint(
     reference_image: Optional[UploadFile] = File(None),
     model_image: Optional[UploadFile] = File(None),
     reference_images: Optional[list[UploadFile]] = File(None),
+    actor: dict = Depends(verify_flow_access),
 ):
     """
     Endpoint tạo ảnh chuyên biệt với các mô hình Google Flow (Nano Banana Pro / 2 / 2 Lite).
@@ -526,7 +622,7 @@ async def generate_image_endpoint(
         thinking_level=thinking_level,
     )
 
-    logger.info(f"🎨 Image Job {job_id[:8]} [{model}] created for: '{prompt[:50]}...'")
+    logger.info(f"🎨 Image Job {job_id[:8]} [{model}] by {actor.get('email', 'user')} created: '{prompt[:50]}...'")
     return {
         "task_id": job_id,
         "job_id": job_id,
@@ -536,7 +632,7 @@ async def generate_image_endpoint(
 
 
 # ── Endpoint: Generate Video (Omni 1.2 Flash / Veo 3.1 Lite) ──────────────────
-@app.post("/api/generate-video", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/generate-video", tags=["Generation"])
 async def generate_video_endpoint(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -548,6 +644,7 @@ async def generate_video_endpoint(
     reference_image: Optional[UploadFile] = File(None),
     end_frame_image: Optional[UploadFile] = File(None),
     reference_images: Optional[list[UploadFile]] = File(None),
+    actor: dict = Depends(verify_flow_access),
 ):
     """
     Endpoint tạo video chuyên biệt với Omni 1.2 Flash / Veo 3.1 Lite trên Google Flow.
@@ -609,7 +706,7 @@ async def generate_video_endpoint(
     )
 
     is_i2v = reference_image_path is not None
-    logger.info(f"🎬 Video Job {job_id[:8]} [{model} {'I2V' if is_i2v else 'T2V'}] created: '{prompt[:50]}...'")
+    logger.info(f"🎬 Video Job {job_id[:8]} [{model} {'I2V' if is_i2v else 'T2V'}] by {actor.get('email', 'user')} created: '{prompt[:50]}...'")
     return {
         "task_id": job_id,
         "job_id": job_id,
@@ -619,7 +716,7 @@ async def generate_video_endpoint(
 
 
 # ── Endpoint: Unified Generate (Backward Compatibility) ──────────────────────
-@app.post("/api/generate", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/generate", tags=["Generation"], dependencies=[Depends(verify_flow_access)])
 async def generate(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
@@ -691,7 +788,7 @@ async def generate(
 
 
 # ── Polling Endpoints: /api/tasks/{task_id} & /api/job/{job_id} ──────────────
-@app.get("/api/tasks/{task_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.get("/api/tasks/{task_id}", tags=["Generation"], dependencies=[Depends(verify_flow_access)])
 async def get_task_status(task_id: str):
     """Poll trạng thái tiến độ và kết quả theo task_id."""
     job = job_store.get(task_id)
@@ -700,7 +797,7 @@ async def get_task_status(task_id: str):
     return format_job_response(job)
 
 
-@app.get("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.get("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_access)])
 async def get_job_status(job_id: str):
     """Poll trạng thái tiến độ và kết quả (tương thích endpoint Frontend)."""
     job = job_store.get(job_id)
@@ -709,8 +806,8 @@ async def get_job_status(job_id: str):
     return format_job_response(job)
 
 
-@app.delete("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
-@app.delete("/api/tasks/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_token)])
+@app.delete("/api/job/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_access)])
+@app.delete("/api/tasks/{job_id}", tags=["Generation"], dependencies=[Depends(verify_flow_access)])
 async def cancel_job(job_id: str):
     """Xoá job/task khỏi store."""
     if job_id in job_store:
@@ -719,7 +816,7 @@ async def cancel_job(job_id: str):
     raise HTTPException(status_code=404, detail="Job không tồn tại.")
 
 
-@app.get("/api/models", tags=["Info"], dependencies=[Depends(verify_flow_token)])
+@app.get("/api/models", tags=["Info"], dependencies=[Depends(verify_flow_access)])
 async def list_models():
     """Danh sách model Google Flow sẵn có (Cập nhật 11/2026)."""
     return {
@@ -757,9 +854,9 @@ async def list_models():
     }
 
 
-@app.post("/api/clear-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/clear-session", tags=["Auth"], dependencies=[Depends(verify_admin_token)])
 async def clear_session():
-    """Xoá session đã lưu — dùng khi cần đăng nhập lại."""
+    """Xoá session đã lưu — chỉ Admin (FLOW_ACCESS_TOKEN) mới được phép gọi."""
     from session_manager import clear_cookies
     from google_flow_client import close_browser
     clear_cookies()
@@ -771,9 +868,9 @@ class ImportSessionPayload(BaseModel):
     cookies: list[dict]
 
 
-@app.post("/api/import-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
+@app.post("/api/import-session", tags=["Auth"], dependencies=[Depends(verify_admin_token)])
 async def import_session(payload: ImportSessionPayload):
-    """Cập nhật / Import session cookies cho backend từ xa."""
+    """Cập nhật / Import session cookies cho backend từ xa — chỉ Admin (FLOW_ACCESS_TOKEN)."""
     from session_manager import save_cookies
     from google_flow_client import close_browser
     if not payload.cookies:
@@ -783,7 +880,7 @@ async def import_session(payload: ImportSessionPayload):
     return {"success": True, "message": f"Đã lưu thành công {len(payload.cookies)} cookies"}
 
 
-@app.get("/api/export-session", tags=["Auth"], dependencies=[Depends(verify_flow_token)])
+@app.get("/api/export-session", tags=["Auth"], dependencies=[Depends(verify_admin_token)])
 async def export_session():
     """Xuất session cookies hiện tại — mặc định bị khóa trên Cloud vì lý do bảo mật."""
     if os.getenv("ALLOW_SESSION_EXPORT", "false").strip().lower() != "true":
